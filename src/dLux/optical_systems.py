@@ -13,6 +13,7 @@ __all__ = [
     "AngularOpticalSystem",
     "CartesianOpticalSystem",
     "LayeredOpticalSystem",
+    "TwoPlaneOpticalSystem",
 ]
 
 from .layers.optical_layers import OpticalLayer
@@ -620,6 +621,146 @@ class CartesianOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         pixel_scale = 1e-6 * true_pixel_scale
         psf_npixels = self.psf_npixels * self.oversample
         wf = wf.propagate(psf_npixels, pixel_scale, self.focal_length)
+
+        # Return PSF or Wavefront
+        if return_wf:
+            return wf
+        return wf.psf
+
+
+class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
+    """
+    An extension to the LayeredOpticalSystem class that propagates a wavefront to an
+    intermediate plane before propagating to the image plane with `psf_pixel_scale`
+    in units of arcseconds.
+
+    # TODO: Modify the unit test for this class to actually test specific methods
+    # TODO: Create a UML png image describing the inheritence of this class
+    # TODO: May need to include a __getattr__ method to access the keys of p1/p2_layers
+
+    ??? abstract "UML"
+        ![UML](../../assets/uml/AngularOpticalSystem.png)
+
+    Attributes
+    ----------
+    wf_npixels : int
+        The number of pixels representing the wavefront.
+    diameter : Array, metres
+        The diameter of the initial wavefront to propagate.
+    p1_layers : OrderedDict
+        A series of `OpticalLayer` transformations to apply at plane 1.
+    p2_layers : OrderedDict
+            A series of `OpticalLayer` transformations to apply at plane 2.
+    prop_dist : float, metres
+        The propagation distance from plane 1 to plane 2
+    psf_npixels : int
+        The number of pixels of the final PSF.
+    psf_pixel_scale : float, arcseconds
+        The pixel scale of the final PSF.
+    oversample : int
+        The oversampling factor of the final PSF. Decreases the psf_pixel_scale
+        parameter while increasing the psf_npixels parameter.
+    """
+
+    p1_layers: OrderedDict
+    p2_layers: OrderedDict
+    prop_dist: None
+
+    def __init__(
+        self: OpticalSystem,
+        wf_npixels: int,
+        diameter: float,
+        p1_layers: list[OpticalLayer, tuple],
+        p2_layers: list[OpticalLayer, tuple],
+        prop_dist: float,
+        psf_npixels: int,
+        psf_pixel_scale: float,
+        oversample: int = 1,
+    ):
+        """
+        Parameters
+        ----------
+        wf_npixels : int
+            The number of pixels representing the wavefront.
+        diameter : Array, metres
+            The diameter of the initial wavefront to propagate.
+        p1_layers : list[OpticalLayer, tuple]
+            A list of `OpticalLayer` transformations to apply at the pupil. The list
+            entries can be either `OpticalLayer` objects or tuples of (key, layer) to
+            specify a key for the layer in the layers dictionary.
+        p2_layers : list[OpticalLayer, tuple]
+            A list of `OpticalLayer` transformations to apply at plane 2. The list
+            entries can be either `OpticalLayer` objects or tuples of (key, layer) to
+            specify a key for the layer in the layers dictionary.
+        prop_dist : float, metres
+            The propagation distance to plane 2
+        psf_npixels : int
+            The number of pixels of the final PSF.
+        psf_pixel_scale : float, arcseconds
+            The pixel scale of the final PSF in units of arcseconds.
+        oversample : int
+            The oversampling factor of the final PSF. Decreases the psf_pixel_scale
+            parameter while increasing the psf_npixels parameter.
+        """
+
+        self.p1_layers = dlu.list2dictionary(p1_layers, True, OpticalLayer)
+        self.p2_layers = dlu.list2dictionary(p2_layers, True, OpticalLayer)
+        self.prop_dist = float(prop_dist)
+
+        super().__init__(
+            wf_npixels=wf_npixels,
+            diameter=diameter,
+            layers=[],
+            psf_npixels=psf_npixels,
+            psf_pixel_scale=psf_pixel_scale,
+            oversample=oversample,
+        )
+
+    def propagate_mono(
+        self: OpticalSystem,
+        wavelength: Array,
+        offset: Array = np.zeros(2),
+        return_wf: bool = False,
+    ) -> Array:
+        """
+        Propagates a monochromatic point source through the optical layers.
+
+        Parameters
+        ----------
+        wavelength : float, metres
+            The wavelength of the wavefront to propagate through the optical layers.
+        offset : Array, radians = np.zeros(2)
+            The (x, y) offset from the optical axis of the source.
+        return_wf: bool = False
+            Should the Wavefront object be returned instead of the psf Array?
+
+        Returns
+        -------
+        object : Array, Wavefront
+            if `return_wf` is False, returns the psf Array.
+            if `return_wf` is True, returns the Wavefront object.
+        """
+
+        # Initialise a Wavefront object
+        wf = Wavefront(self.wf_npixels, self.diameter, wavelength)
+        wf = wf.tilt(offset)
+
+        # Apply pupil layers
+        for layer in list(self.p1_layers.values()):
+            wf *= layer
+
+        # Propagate to Plane 2
+        wf = wf.propagate_fresnel_AS(self.prop_dist)
+
+        # Apply secondary layers
+        for layer in list(self.p2_layers.values()):
+            wf *= layer
+
+        # Propagate to Focus
+        true_pixel_scale = self.psf_pixel_scale / self.oversample
+        pixel_scale = dlu.arcsec2rad(true_pixel_scale)
+        psf_npixels = self.psf_npixels * self.oversample
+        wf = wf.propagate(psf_npixels, pixel_scale)
 
         # Return PSF or Wavefront
         if return_wf:

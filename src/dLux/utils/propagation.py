@@ -406,3 +406,76 @@ def fresnel_MFT(
 
     phasor *= second_factor
     return phasor
+
+
+def fresnel_AS(
+    phasor: Array,
+    wavelength: float,
+    diameter: float,
+    prop_dist: float,
+    pad: int = 2,
+) -> Array:
+    """
+    Performs Fresnel propagation by multiplication of the angular spectrum
+    by the transfer function given in eq. 4-20 on p. 72 of Goodman
+
+    Parameters
+    ----------
+    phasor : Array[complex]
+        The input phasor.
+    wavelength : float, meters
+        The wavelength of the input phasor.
+    diameter : float, meters
+        The diameter of the input phasor array
+    prop_dist : float, meters
+        The distance to propagate
+    pad : int = 2, Pad factor for the input array before propagation
+
+    Returns
+    -------
+    phasor : Array[complex]
+        The propagated phasor.
+    """
+
+    # Pad the input array
+    Npad = (phasor.shape[0] * (pad - 1)) // 2
+    phasor = np.pad(phasor, Npad)
+    radius = np.asarray(pad * diameter / 2, float)
+    N = phasor.shape[0]
+
+    # Create the frequency grid for f^2 = fx^2 + fy^2
+    k = 2 * np.pi / wavelength
+    fx = np.fft.fftfreq(N) * N  # Frequency vector
+    fy = fx  # Square input assumed
+    fx, fy = np.meshgrid(fx, fy)  # Create 2D grid
+    f2 = fx**2 + fy**2
+
+    # Debug Messages
+    sqrt_argument = 1 - (1 / 4) * (wavelength / radius) ** 2 * f2
+    print("radius:", radius)
+    print("wavelength:", wavelength)
+    print("min(f2):", np.min(f2))
+    print("max(f2):", np.max(f2))
+    print("sqrt argument min:", np.min(sqrt_argument))
+    print("sqrt argument N elem below zero:", np.sum(sqrt_argument < 0))
+
+    # Compute the transfer function H (Goodman Eq. 4-20)
+    H = np.exp(
+        1j
+        * k
+        * prop_dist
+        * (
+            np.sqrt(
+                np.maximum(0, 1 - (1 / 4) * (wavelength / radius) ** 2 * f2)
+                - 0
+            )
+        )
+    )
+
+    # Perform the  propagation
+    phasor = np.fft.ifft2(np.fft.fft2(phasor) * H)
+
+    # Un-pad the array
+    phasor = phasor[Npad:-Npad, Npad:-Npad]
+
+    return phasor

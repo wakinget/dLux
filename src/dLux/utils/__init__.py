@@ -31,7 +31,12 @@ modules = [
 __all__ = [module.__all__ for module in modules]
 
 # Dont import all functions from modules
-from .propagation import FFT as FFT, MFT as MFT, fresnel_MFT as fresnel_MFT
+from .propagation import (
+    FFT as FFT,
+    MFT as MFT,
+    fresnel_MFT as fresnel_MFT,
+    fresnel_AS as fresnel_AS,
+)
 from .coordinates import (
     cart2polar as cart2polar,
     polar2cart as polar2cart,

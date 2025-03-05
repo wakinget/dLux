@@ -6,6 +6,7 @@ from dLux import (
     LayeredOpticalSystem,
     AngularOpticalSystem,
     CartesianOpticalSystem,
+    TwoPlaneOpticalSystem,
     PointSource,
     Wavefront,
     PSF,
@@ -93,6 +94,11 @@ def focal_length():
     return 1.0
 
 
+@pytest.fixture
+def prop_dist():
+    return 1.0
+
+
 def test_angular_optics(
     wf_npixels, diameter, layers, psf_npixels, psf_pixel_scale, oversample
 ):
@@ -118,6 +124,30 @@ def test_cartesian_optics(
         diameter,
         layers,
         focal_length,
+        psf_npixels,
+        psf_pixel_scale,
+        oversample,
+    )
+    _test_model(optics)
+    _test_propagate(optics)
+    _test_propagate_mono(optics)
+
+
+def test_two_plane_optics(
+    wf_npixels,
+    diameter,
+    layers,
+    prop_dist,
+    psf_npixels,
+    psf_pixel_scale,
+    oversample,
+):
+    optics = TwoPlaneOpticalSystem(
+        wf_npixels,
+        diameter,
+        layers,
+        layers,
+        prop_dist,
         psf_npixels,
         psf_pixel_scale,
         oversample,
