@@ -450,14 +450,14 @@ def fresnel_AS(
     fx, fy = np.meshgrid(fx, fy)  # Create 2D grid
     f2 = fx**2 + fy**2
 
-    # Debug Messages
-    sqrt_argument = 1 - (1 / 4) * (wavelength / radius) ** 2 * f2
-    print("radius:", radius)
-    print("wavelength:", wavelength)
-    print("min(f2):", np.min(f2))
-    print("max(f2):", np.max(f2))
-    print("sqrt argument min:", np.min(sqrt_argument))
-    print("sqrt argument N elem below zero:", np.sum(sqrt_argument < 0))
+    # # Debug Messages
+    # sqrt_argument = 1 - (1 / 4) * (wavelength / radius) ** 2 * f2
+    # print("radius:", radius)
+    # print("wavelength:", wavelength)
+    # print("min(f2):", np.min(f2))
+    # print("max(f2):", np.max(f2))
+    # print("sqrt argument min:", np.min(sqrt_argument))
+    # print("sqrt argument N elem below zero:", np.sum(sqrt_argument < 0))
 
     # Compute the transfer function H (Goodman Eq. 4-20)
     H = np.exp(
