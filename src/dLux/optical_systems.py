@@ -14,6 +14,7 @@ __all__ = [
     "CartesianOpticalSystem",
     "LayeredOpticalSystem",
     "TwoPlaneOpticalSystem",
+    "MultiPlaneOpticalSystem",
 ]
 
 from .layers.optical_layers import OpticalLayer
