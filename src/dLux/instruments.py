@@ -110,10 +110,13 @@ class Telescope(Instrument):
             f"{self.__class__.__name__} has no attribute " f"{key}."
         )
 
-    def get(self, key: str):
+    def get(self, key):
         val = self
         for part in key.split("."):
-            val = getattr(val, part)
+            if isinstance(val, dict):
+                val = val.get(part)
+            else:
+                val = getattr(val, part)
         return val
 
     def model(self: Telescope, return_psf: bool = False) -> Array:
