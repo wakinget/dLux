@@ -115,6 +115,8 @@ class Telescope(Instrument):
         for part in key.split("."):
             if isinstance(val, dict):
                 val = val.get(part)
+            elif hasattr(val, "get"):
+                val = val.get(part)
             else:
                 val = getattr(val, part)
         return val
