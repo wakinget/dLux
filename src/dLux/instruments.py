@@ -110,6 +110,12 @@ class Telescope(Instrument):
             f"{self.__class__.__name__} has no attribute " f"{key}."
         )
 
+    def get(self, key: str):
+        val = self
+        for part in key.split("."):
+            val = getattr(val, part)
+        return val
+
     def model(self: Telescope, return_psf: bool = False) -> Array:
         """
         Models the source objects through the optical system and detector.
