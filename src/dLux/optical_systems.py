@@ -1101,7 +1101,7 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
 
         return wf if return_wf else wf.psf
 
-    def propagate_to_plane(
+    def propagate_mono_to_plane(
         self,
         wavelength: float,
         offset: Array = np.zeros(2),
@@ -1187,6 +1187,84 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         wf = wf.propagate(psf_npixels, pixel_scale)
 
         return wf if return_wf else wf.psf
+
+    def propagate_to_plane(
+        self: OpticalSystem,
+        wavelengths: Array,
+        offset: Array = np.zeros(2),
+        weights: Array = None,
+        plane_index: int = -1,  # Default to last plane (full propagation)
+        return_wf: bool = False,
+        return_psf: bool = False,
+    ) -> Array:
+        """
+        Propagates a Polychromatic point source through the optics.
+
+        Parameters
+        ----------
+        wavelengths : Array, metres
+            The wavelengths of the wavefronts to propagate through the optics.
+        offset : Array, radians = np.zeros(2)
+            The (x, y) offset from the optical axis of the source.
+        weights : Array = None
+            The weight of each wavelength. If None, all weights are equal.
+        plane_index : int, optional
+            The index of the plane at which to stop propagation.
+            Default is -1, which propagates fully to the image plane.
+        return_wf : bool = False
+            Should the Wavefront object be returned instead of the psf Array?
+        return_psf : bool = False
+            Should the PSF object be returned instead of the psf Array?
+
+        Returns
+        -------
+        object : Array, Wavefront, PSF
+            if `return_wf` is False and `return_psf` is False, returns the psf Array.
+            if `return_wf` is True and `return_psf` is False, returns the Wavefront
+                object.
+            if `return_wf` is False and `return_psf` is True, returns the PSF object.
+        """
+        if return_wf and return_psf:
+            raise ValueError(
+                "return_wf and return_psf cannot both be True. "
+                "Please choose one."
+            )
+
+        wavelengths = np.atleast_1d(wavelengths)
+        if weights is None:
+            weights = np.ones_like(wavelengths) / len(wavelengths)
+        else:
+            weights = np.atleast_1d(weights)
+
+        # Check wavelengths and weights
+        if weights.shape != wavelengths.shape:
+            raise ValueError(
+                "wavelengths and weights must have the "
+                f"same shape, got {wavelengths.shape} and {weights.shape} "
+                "respectively."
+            )
+
+        # Check offset
+        offset = np.array(offset) if not isinstance(offset, Array) else offset
+        if offset.shape != (2,):
+            raise ValueError(
+                "offset must be a 2-element array, got "
+                f"shape {offset.shape}."
+            )
+
+        # Calculate - note we multiply by sqrt(weight) to account for the
+        # fact that the PSF is the square of the amplitude
+        prop_fn = lambda wavelength, weight: self.propagate_mono_to_plane(
+            wavelength, offset, plane_index, return_wf=True
+        ).multiply("amplitude", weight**0.5)
+        wf = filter_vmap(prop_fn)(wavelengths, weights)
+
+        # Return PSF, Wavefront, or array psf
+        if return_wf:
+            return wf
+        if return_psf:
+            return PSF(wf.psf.sum(0), wf.pixel_scale.mean())
+        return wf.psf.sum(0)
 
     def insert_layer(
         self, layer: Union[OpticalLayer, tuple], index: int, plane_index: int
