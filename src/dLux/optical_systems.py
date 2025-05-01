@@ -6,6 +6,8 @@ from jax import Array
 from zodiax import filter_vmap, Base
 from typing import Union, Any
 import dLux.utils as dlu
+import jax
+from dLux.layers import TransmissiveLayer, AberratedLayer, BasisLayer
 
 
 __all__ = [
@@ -13,7 +15,7 @@ __all__ = [
     "AngularOpticalSystem",
     "CartesianOpticalSystem",
     "LayeredOpticalSystem",
-    "TwoPlaneOpticalSystem",
+    "ThreePlaneOpticalSystem",
     "MultiPlaneOpticalSystem",
 ]
 
@@ -629,7 +631,66 @@ class CartesianOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         return wf.psf
 
 
-class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
+def scale_layer(layer_in, pixel_scale_in, pixel_scale_out, npix_out):
+    """
+    Scales an optical layer to a new resolution and pixel scale.
+
+    Supports TransmissiveLayer, AberratedLayer, and BasisLayer.
+    """
+    scale_factor = pixel_scale_out / pixel_scale_in
+    new_layer = layer_in
+
+    # --- Transmissive Component ---
+    if isinstance(layer_in, TransmissiveLayer):
+        transmission = layer_in.transmission
+        if transmission is not None:
+            if transmission.ndim != 2:
+                raise ValueError(
+                    f"TransmissiveLayer transmission must be 2D "
+                    f"(got shape {transmission.shape})"
+                )
+            scaled = dlu.scale(transmission, npix_out, scale_factor)
+            new_layer = new_layer.set("transmission", scaled)
+
+    # --- Aberrated Component ---
+    if isinstance(layer_in, AberratedLayer):
+        if layer_in.opd is not None:
+            if layer_in.opd.ndim != 2:
+                raise ValueError(
+                    f"AberratedLayer opd must be 2D, got shape {layer_in.opd.shape}"
+                )
+            scaled_opd = dlu.scale(layer_in.opd, npix_out, scale_factor)
+            new_layer = new_layer.set("opd", scaled_opd)
+
+        if layer_in.phase is not None:
+            if layer_in.phase.ndim != 2:
+                raise ValueError(
+                    f"AberratedLayer phase must be 2D, got shape {layer_in.phase.shape}"
+                )
+            scaled_phase = dlu.scale(layer_in.phase, npix_out, scale_factor)
+            new_layer = new_layer.set("phase", scaled_phase)
+
+    # --- Basis Component ---
+    if isinstance(layer_in, BasisLayer):
+        basis = layer_in.basis
+        if basis is not None:
+            if basis.ndim != 3:
+                raise ValueError(
+                    "BasisLayer basis must be a 3D array [n_modes, H, W]"
+                )
+            scale_fn = jax.vmap(dlu.scale, (0, None, None))
+            scaled_basis = scale_fn(basis, npix_out, scale_factor)
+            new_layer = new_layer.set("basis", scaled_basis)
+
+    # --- Final Return ---
+    if new_layer is not layer_in:
+        return new_layer
+
+    # If no recognized layers were scaled
+    raise TypeError(f"Unsupported layer type: {type(layer_in)}")
+
+
+class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     """
     An extension to the LayeredOpticalSystem class that propagates a wavefront to an
     intermediate plane before propagating to the image plane with `psf_pixel_scale`
@@ -637,7 +698,6 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
 
     # TODO: Modify the unit test for this class to actually test specific methods
     # TODO: Create a UML png image describing the inheritence of this class
-    # TODO: Needs a __getattr__ method to access the layers properly
 
     ??? abstract "UML"
         ![UML](../../assets/uml/AngularOpticalSystem.png)
@@ -671,8 +731,9 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     p2_diameter: None
     p1_layers: OrderedDict
     p2_layers: OrderedDict
-    separation: None
+    plane_separation: None
     magnification: None
+    pad_factor: None
 
     def __init__(
         self: OpticalSystem,
@@ -681,7 +742,7 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         p2_diameter: float,
         p1_layers: list[OpticalLayer, tuple],
         p2_layers: list[OpticalLayer, tuple],
-        separation: float,
+        plane_separation: float,
         magnification: float,
         psf_npixels: int,
         psf_pixel_scale: float,
@@ -704,7 +765,7 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             A list of `OpticalLayer` transformations to apply at plane 2. The list
             entries can be either `OpticalLayer` objects or tuples of (key, layer) to
             specify a key for the layer in the layers dictionary.
-        separation : float, metres
+        plane_separation : float, metres
             The physical distance between plane 1 and plane 2
         magnification : float
             The magnification at plane 1, affects the propagation distance
@@ -721,8 +782,13 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         self.p2_diameter = float(p2_diameter)
         self.p1_layers = dlu.list2dictionary(p1_layers, True, OpticalLayer)
         self.p2_layers = dlu.list2dictionary(p2_layers, True, OpticalLayer)
-        self.separation = float(separation)
+        self.plane_separation = float(plane_separation)
         self.magnification = float(magnification)
+
+        # Calculate the pad_factor for propagation to P2
+        self.pad_factor = int(
+            np.ceil((self.p2_diameter * self.magnification) / self.p1_diameter)
+        )
 
         super().__init__(
             wf_npixels=wf_npixels,
@@ -731,6 +797,21 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             psf_npixels=psf_npixels,
             psf_pixel_scale=psf_pixel_scale,
             oversample=oversample,
+        )
+
+    def __getattr__(self, key: str):
+        # Search both p1_layers and p2_layers for a direct key match
+        for layer_dict in (self.p1_layers, self.p2_layers):
+            if key in layer_dict:
+                return layer_dict[key]
+
+            # Search inside each layer for an attribute with that key
+            for layer in layer_dict.values():
+                if hasattr(layer, key):
+                    return getattr(layer, key)
+
+        raise AttributeError(
+            f"{self.__class__.__name__} has no attribute '{key}'."
         )
 
     def insert_layer(
@@ -803,59 +884,60 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         return_wf: bool = False,
     ) -> Array:
         """
-        Propagates a monochromatic point source through the optical layers.
-
-        Parameters
-        ----------
-        wavelength : float, metres
-            The wavelength of the wavefront to propagate through the optical layers.
-        offset : Array, radians = np.zeros(2)
-            The (x, y) offset from the optical axis of the source.
-        return_wf: bool = False
-            Should the Wavefront object be returned instead of the psf Array?
-
-        Returns
-        -------
-        object : Array, Wavefront
-            if `return_wf` is False, returns the psf Array.
-            if `return_wf` is True, returns the Wavefront object.
+        Custom propagation using hybrid Fresnel/MFT logic:
+        - Apply p1 layers (M1).
+        - Fresnel propagate to M2.
+        - Dynamically apply scaled aperture at M2.
+        - Back-propagate to image of M1.
+        - Final MFT propagation to the focal plane.
         """
-
-        # Initialise a Wavefront object
+        # === Initialize M1 wavefront ===
         wf = Wavefront(self.wf_npixels, self.p1_diameter, wavelength)
         wf = wf.tilt(offset)
 
-        # Apply pupil layers
+        # === Apply layers at M1 ===
         for layer in list(self.p1_layers.values()):
             wf *= layer
 
-        # Propagate to Plane 2
-        prop_dist = self.separation * self.magnification
-        wf = wf.propagate_fresnel_AS(prop_dist)
+        # === Propagate to M2 using Fresnel_AS ===
+        prop_dist = self.plane_separation * self.magnification
+        self.p2_diameter * self.magnification / self.p1_diameter
+        # pad = np.ceil(m2_oversize).astype(int)
+        wf = wf.propagate_fresnel_AS(
+            prop_dist, pad=self.pad_factor
+        )  # wf now has pad*wf_npixels
 
-        # Resample at Plane 2
-        sampling_factor = (
-            self.p2_diameter / self.p1_diameter * self.magnification
-        )
-        wf = wf.scale_to(self.wf_npixels, wf.pixel_scale * sampling_factor)
-        wf *= sampling_factor
-
-        # Apply secondary layers
+        # === Apply layers at M2 ===
+        ps_in = (
+            self.p2_diameter * self.magnification / self.wf_npixels
+        )  # Pixel Scale in
+        ps_out = self.p1_diameter / self.wf_npixels  # Pixel Scale out
+        npix_out = self.pad_factor * self.wf_npixels
         for layer in list(self.p2_layers.values()):
-            wf *= layer
+            scaled_layer = scale_layer(
+                layer, ps_in, ps_out, npix_out
+            )  # scaled_layer has pad*wf_npixels
+            wf *= scaled_layer
 
-        # Propagate to Focus
+        # === Back-propagate to pupil plane ===
+        wf = wf.propagate_fresnel_AS(
+            -prop_dist, pad=1
+        )  # wf still has pad*wf_npixels
+
+        # === Resize to original pupil size ===
+        wf = wf.resize(self.wf_npixels)  # Crops down to original wf_npixels
+
+        # === Final MFT propagation to PSF ===
         true_pixel_scale = self.psf_pixel_scale / self.oversample
-        pixel_scale = dlu.arcsec2rad(true_pixel_scale)
+        pixel_scale_rad = dlu.arcsec2rad(true_pixel_scale)
         psf_npixels = self.psf_npixels * self.oversample
-        wf = wf.propagate(psf_npixels, pixel_scale)
+        wf = wf.propagate(psf_npixels, pixel_scale_rad)
 
-        # Return PSF or Wavefront
         if return_wf:
             return wf
         return wf.psf
 
-    def propagate_to_plane2(
+    def prop_mono_to_p2(
         self: OpticalSystem,
         wavelength: Array,
         offset: Array = np.zeros(2),
@@ -881,38 +963,128 @@ class TwoPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             if `return_wf` is True, returns the Wavefront object at Plane 2.
         """
 
-        # Initialise a Wavefront object at Plane 1
+        # === Initialize M1 wavefront ===
         wf = Wavefront(self.wf_npixels, self.p1_diameter, wavelength)
         wf = wf.tilt(offset)
 
-        # Apply Plane 1 layers
+        # === Apply layers at M1 ===
         for layer in list(self.p1_layers.values()):
             wf *= layer
 
-        # Propagate to Plane 2
-        prop_dist = self.separation * self.magnification
-        wf = wf.propagate_fresnel_AS(prop_dist)
+        # === Propagate to M2 using Fresnel_AS ===
+        prop_dist = self.plane_separation * self.magnification
+        self.p2_diameter * self.magnification / self.p1_diameter
+        # pad = np.ceil(m2_oversize).astype(int)
+        wf = wf.propagate_fresnel_AS(
+            prop_dist, pad=self.pad_factor
+        )  # wf now has pad*wf_npixels
 
-        # Resample at Plane 2
-        sampling_factor = (
-            self.p2_diameter / self.p1_diameter * self.magnification
-        )
-        wf = wf.scale_to(self.wf_npixels, wf.pixel_scale * sampling_factor)
-        wf *= sampling_factor  # Maintain flux
-
-        # Apply Plane 2 layers
+        # === Apply layers at M2 ===
+        ps_in = (
+            self.p2_diameter * self.magnification / self.wf_npixels
+        )  # Pixel Scale in
+        ps_out = self.p1_diameter / self.wf_npixels  # Pixel Scale out
+        npix_out = self.pad_factor * self.wf_npixels
         for layer in list(self.p2_layers.values()):
-            wf *= layer
+            scaled_layer = scale_layer(
+                layer, ps_in, ps_out, npix_out
+            )  # scaled_layer has pad*wf_npixels
+            wf *= scaled_layer
+
+        # === Scale to the size of the Secondary ===
+        wf = wf.scale_to(self.wf_npixels, ps_in)
+        wf = wf.set("pixel_scale", self.p2_diameter / self.wf_npixels)
 
         # Return PSF or Wavefront at Plane 2
         if return_wf:
             return wf
         return wf.psf
 
+    def prop_to_p2(
+        self: OpticalSystem,
+        wavelengths: Array,
+        offset: Array = np.zeros(2),
+        weights: Array = None,
+        return_wf: bool = False,
+        return_psf: bool = False,
+    ) -> Array:
+        """
+        Propagates a polychromatic point source to the second optical plane.
+
+        Parameters
+        ----------
+        wavelengths : Array, metres
+            The wavelengths of the wavefronts to propagate through the optics.
+        offset : Array, radians = np.zeros(2)
+            The (x, y) offset from the optical axis of the source.
+        weights : Array = None
+            The weight of each wavelength. If None, all weights are equal.
+        return_wf : bool = False
+            Should the Wavefront object be returned instead of the psf Array?
+        return_psf : bool = False
+            Should the PSF object be returned instead of the psf Array?
+
+        Returns
+        -------
+        object : Array, Wavefront, PSF
+            if `return_wf` is False and `return_psf` is False, returns the PSF Array.
+            if `return_wf` is True, returns a stack of Wavefronts.
+            if `return_psf` is True, returns a PSF object (psf and pixel scale).
+        """
+        if return_wf and return_psf:
+            raise ValueError(
+                "return_wf and return_psf cannot both be True. Please choose one."
+            )
+
+        wavelengths = np.atleast_1d(wavelengths)
+
+        # Handle weights
+        if weights is None:
+            weights = np.ones_like(wavelengths) / len(wavelengths)
+        else:
+            weights = np.atleast_1d(weights)
+
+        if weights.shape != wavelengths.shape:
+            raise ValueError(
+                "wavelengths and weights must have the same shape, "
+                f"got {wavelengths.shape} and {weights.shape}."
+            )
+
+        # Handle offset
+        offset = np.array(offset) if not isinstance(offset, Array) else offset
+        if offset.ndim == 1:
+            offset = np.broadcast_to(offset, (wavelengths.shape[0], 2))
+        elif offset.shape != (wavelengths.shape[0], 2):
+            raise ValueError(
+                "offset must be shape (2,) or (n, 2) matching wavelengths. "
+                f"Got shape {offset.shape}."
+            )
+
+        # Propagation function (amplitude-weighted)
+        prop_fn = lambda wl, wt, off: self.prop_mono_to_p2(
+            wl, off, return_wf=True
+        ).multiply("amplitude", wt**0.5)
+        # wf_stack = jax.vmap(prop_fn)(wavelengths, weights, offset)
+        wf_stack = filter_vmap(prop_fn)(wavelengths, weights, offset)
+
+        # # Calculate - note we multiply by sqrt(weight) to account for the
+        # # fact that the PSF is the square of the amplitude
+        # prop_fn = lambda wavelength, weight: self.propagate_mono_to_plane(
+        #     wavelength, offset, plane_index, return_wf=True
+        # ).multiply("amplitude", weight**0.5)
+        # wf = filter_vmap(prop_fn)(wavelengths, weights)
+
+        # Output format
+        if return_wf:
+            return wf_stack
+        if return_psf:
+            return PSF(wf_stack.psf.sum(0), wf_stack.pixel_scale.mean())
+        return wf_stack.psf.sum(0)
+
 
 class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     """
-    A generalization of TwoPlaneOpticalSystem that supports multiple optical planes.
+    A generalization of ThreePlaneOpticalSystem that supports multiple optical planes.
     """
 
     diameter: list[float]
@@ -1041,6 +1213,16 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             f"{self.__class__.__name__} has no attribute '{key}'."
         )
 
+    @property
+    def n_planes(self) -> int:
+        """
+        Returns the number of planes in the current MultiPlaneOpticalSystem
+        -------
+        n_planes : int
+            The number of planes initialized
+        """
+        return len(self.diameter)
+
     def propagate_mono(
         self,
         wavelength: float,
@@ -1066,23 +1248,28 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         """
 
         # Initialize the wavefront at the first plane
+        # print("Initializing WaveFront")
         wf = Wavefront(self.wf_npixels, self.diameter[0], wavelength)
         wf = wf.tilt(offset)
 
+        # Apply layers at first plane
+        # print("Applying layers at plane %d" % 0)
+        for layer in self.layers.get(0, {}).values():
+            # print(layer)
+            wf *= layer
+
         # Iterate through optical planes
         for i in range(len(self.plane_separations)):
-            # Apply layers at this plane
-            for layer in self.layers.get(i, {}).values():
-                wf *= layer
-
             # Propagate to the next plane
+            # print("Propagating to plane %d" % (i+1))
             prop_dist = (
                 self.plane_separations[i] * self.plane_magnifications[i]
             )
             wf = wf.propagate_fresnel_AS(prop_dist)
 
             # Resample at the next plane
-            if i + 1 < len(self.diameter):
+            if i + 1 < self.n_planes:
+                # print("Resampling at plane %d" % (i+1))
                 sampling_factor = (
                     self.diameter[i + 1]
                     / self.diameter[i]
@@ -1093,7 +1280,14 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
                 )
                 wf *= sampling_factor  # Preserve flux
 
+            # Apply layers at this plane
+            # print("Applying layers at plane %d" % (i+1))
+            for layer in self.layers.get(i + 1, {}).values():
+                # print(layer)
+                wf *= layer
+
         # Final propagation to the image plane
+        # print("Propagating to focal plane")
         true_pixel_scale = self.psf_pixel_scale / self.oversample
         pixel_scale = dlu.arcsec2rad(true_pixel_scale)
         psf_npixels = self.psf_npixels * self.oversample
@@ -1130,40 +1324,41 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             The wavefront (if `return_wf=True`) or the PSF at the specified plane.
         """
 
-        n_planes = len(self.diameter)
-        current_plane = 0
-
         # Adjust for negative index (i.e., full propagation)
         if plane_index < 0:
-            plane_index = n_planes  # Last plane index
+            plane_index = self.n_planes  # Last plane index
 
-        if plane_index > n_planes or plane_index < 0:
+        if plane_index > self.n_planes or plane_index < 0:
             raise ValueError(
-                f"Invalid plane index: {plane_index}. Must be between 0 and {n_planes}."
+                f"Invalid plane index: {plane_index}. "
+                f"Must be between 0 and {self.n_planes}."
             )
 
         # Initialize the wavefront at the first plane
+        # print("Initializing WaveFront")
         wf = Wavefront(self.wf_npixels, self.diameter[0], wavelength)
         wf = wf.tilt(offset)
 
         # Apply layers at first plane
+        # print("Applying layers at plane %d" % 0)
         for layer in self.layers.get(0, {}).values():
+            # print(layer)
             wf *= layer
 
-        # Stop propagation if we've reached the requested plane
-        if plane_index == current_plane:
+        if plane_index == 0:
             return wf if return_wf else wf.psf
 
-        # Iterate through intermediate planes
-        n_intermediate_planes = n_planes - 1
-        for i in range(n_intermediate_planes):
+        # Iterate through optical planes
+        for i in range(len(self.plane_separations)):
+            # Propagate to the next plane
+            # print("Propagating to plane %d" % (i+1))
             prop_dist = (
                 self.plane_separations[i] * self.plane_magnifications[i]
             )
             wf = wf.propagate_fresnel_AS(prop_dist)
-            current_plane += 1  # Increment current plane
 
             # Resample at the next plane
+            # print("Resampling at plane %d" % (i+1))
             sampling_factor = (
                 self.diameter[i + 1]
                 / self.diameter[i]
@@ -1172,15 +1367,17 @@ class MultiPlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             wf = wf.scale_to(self.wf_npixels, wf.pixel_scale * sampling_factor)
             wf *= sampling_factor  # Preserve flux
 
-            # Apply layers at current plane
+            # Apply layers at this plane
+            # print("Applying layers at plane %d" % (i+1))
             for layer in self.layers.get(i + 1, {}).values():
+                # print(layer)
                 wf *= layer
 
-            # Stop if we've reached the requested plane
-            if plane_index == current_plane:
+            if plane_index == (i + 1):
                 return wf if return_wf else wf.psf
 
-        # Propagate to the image plane
+        # Final propagation to the image plane
+        # print("Propagating to focal plane")
         true_pixel_scale = self.psf_pixel_scale / self.oversample
         pixel_scale = dlu.arcsec2rad(true_pixel_scale)
         psf_npixels = self.psf_npixels * self.oversample

@@ -54,7 +54,7 @@ from .optical_systems import (
     AngularOpticalSystem as AngularOpticalSystem,
     CartesianOpticalSystem as CartesianOpticalSystem,
     LayeredOpticalSystem as LayeredOpticalSystem,
-    TwoPlaneOpticalSystem as TwoPlaneOpticalSystem,
+    ThreePlaneOpticalSystem as ThreePlaneOpticalSystem,
     MultiPlaneOpticalSystem as MultiPlaneOpticalSystem,
 )
 

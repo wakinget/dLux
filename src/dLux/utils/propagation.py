@@ -3,7 +3,7 @@ from jax import Array, vmap
 import dLux.utils as dlu
 
 
-__all__ = ["FFT", "MFT", "fresnel_MFT"]
+__all__ = ["FFT", "MFT", "fresnel_MFT", "fresnel_phase_factors"]
 
 
 def FFT(
@@ -408,74 +408,178 @@ def fresnel_MFT(
     return phasor
 
 
+def fresnel_transfer_function(
+    N: int, wavelength: float, diameter: float, prop_dist: float, pad: int = 2
+) -> Array:
+    """
+    Computes the Fresnel angular spectrum transfer function quickly.
+
+    Parameters
+    ----------
+    N : int
+        Size of the input phasor array (before padding).
+    wavelength : float
+        Wavelength in meters.
+    diameter : float
+        Diameter of the aperture in meters.
+    prop_dist : float
+        Propagation distance in meters.
+    pad : int
+        Padding factor applied to the input array.
+
+    Returns
+    -------
+    H : np.ndarray
+        The complex Fresnel transfer function.
+    """
+    Npad = N * pad
+    radius = (pad * diameter) / 2
+    k = 2 * np.pi / wavelength
+
+    fx = np.fft.fftfreq(Npad) * Npad
+    fy = fx.copy()
+
+    # Compute 1D components separately
+    fx2 = fx**2
+    fy2 = fy**2
+
+    sqrt_arg_fx = 1 - (1 / 4) * (wavelength / radius) ** 2 * fx2
+    sqrt_arg_fy = 1 - (1 / 4) * (wavelength / radius) ** 2 * fy2
+
+    # Avoid negative sqrt
+    sqrt_arg_fx = np.maximum(0, sqrt_arg_fx)
+    sqrt_arg_fy = np.maximum(0, sqrt_arg_fy)
+
+    # Exponential components
+    tfx = np.exp(1j * k * prop_dist * (np.sqrt(sqrt_arg_fx) - 0))
+    tfy = np.exp(1j * k * prop_dist * (np.sqrt(sqrt_arg_fy) - 0))
+
+    # Outer product to form the 2D transfer function
+    H = np.outer(tfy, tfx)
+
+    return H
+
+
 def fresnel_AS(
     phasor: Array,
     wavelength: float,
     diameter: float,
     prop_dist: float,
     pad: int = 2,
-) -> Array:
+    transfer_function: Array = None,
+) -> np.ndarray:
     """
     Performs Fresnel propagation by multiplication of the angular spectrum
-    by the transfer function given in eq. 4-20 on p. 72 of Goodman
+    by the transfer function.
 
     Parameters
     ----------
-    phasor : Array[complex]
-        The input phasor.
-    wavelength : float, meters
-        The wavelength of the input phasor.
-    diameter : float, meters
-        The diameter of the input phasor array
-    prop_dist : float, meters
-        The distance to propagate
-    pad : int = 2, Pad factor for the input array before propagation
+    phasor : np.ndarray
+        The input phasor (complex array).
+    wavelength : float
+        Wavelength of the input phasor (meters).
+    diameter : float
+        Diameter of the input phasor array (meters).
+    prop_dist : float
+        Distance to propagate (meters).
+    pad : int, optional
+        Padding factor for the input array before propagation. Default is 2.
+    transfer_function : np.ndarray, optional
+        Precomputed Fresnel transfer function. If None, it is computed internally.
 
     Returns
     -------
-    phasor : Array[complex]
+    phasor : np.ndarray
         The propagated phasor.
     """
 
     # Pad the input array
-    Npad = (phasor.shape[0] * (pad - 1)) // 2
-    phasor = np.pad(phasor, Npad)
-    radius = np.asarray(pad * diameter / 2, float)
+    pad = int(pad)
     N = phasor.shape[0]
+    Npad = (N * (pad - 1)) // 2
+    phasor = np.pad(phasor, Npad)
 
-    # Create the frequency grid for f^2 = fx^2 + fy^2
-    k = 2 * np.pi / wavelength
-    fx = np.fft.fftfreq(N) * N  # Frequency vector
-    fy = fx  # Square input assumed
-    fx, fy = np.meshgrid(fx, fy)  # Create 2D grid
-    f2 = fx**2 + fy**2
-
-    # # Debug Messages
-    # sqrt_argument = 1 - (1 / 4) * (wavelength / radius) ** 2 * f2
-    # print("radius:", radius)
-    # print("wavelength:", wavelength)
-    # print("min(f2):", np.min(f2))
-    # print("max(f2):", np.max(f2))
-    # print("sqrt argument min:", np.min(sqrt_argument))
-    # print("sqrt argument N elem below zero:", np.sum(sqrt_argument < 0))
-
-    # Compute the transfer function H (Goodman Eq. 4-20)
-    H = np.exp(
-        1j
-        * k
-        * prop_dist
-        * (
-            np.sqrt(
-                np.maximum(0, 1 - (1 / 4) * (wavelength / radius) ** 2 * f2)
-                - 0
-            )
+    # Compute the transfer function if not provided
+    if transfer_function is None:
+        transfer_function = fresnel_transfer_function(
+            N, wavelength, diameter, prop_dist, pad=pad
         )
-    )
 
-    # Perform the  propagation
-    phasor = np.fft.ifft2(np.fft.fft2(phasor) * H)
-
-    # Un-pad the array
-    phasor = phasor[Npad:-Npad, Npad:-Npad]
+    # Perform the propagation
+    phasor = np.fft.ifft2(np.fft.fft2(phasor) * transfer_function)
 
     return phasor
+
+
+# # This is the original method that computes the transfer_function slowly
+# def fresnel_AS(
+#     phasor: Array,
+#     wavelength: float,
+#     diameter: float,
+#     prop_dist: float,
+#     pad: int = 2,
+# ) -> Array:
+#     """
+#     Performs Fresnel propagation by multiplication of the angular spectrum
+#     by the transfer function given in eq. 4-20 on p. 72 of Goodman
+#
+#     Parameters
+#     ----------
+#     phasor : Array[complex]
+#         The input phasor.
+#     wavelength : float, meters
+#         The wavelength of the input phasor.
+#     diameter : float, meters
+#         The diameter of the input phasor array
+#     prop_dist : float, meters
+#         The distance to propagate
+#     pad : int = 2, Pad factor for the input array before propagation
+#
+#     Returns
+#     -------
+#     phasor : Array[complex]
+#         The propagated phasor.
+#     """
+#
+#     # Pad the input array
+#     Npad = (phasor.shape[0] * (pad - 1)) // 2
+#     phasor = np.pad(phasor, Npad)
+#     radius = np.asarray(pad * diameter / 2, float)
+#     N = phasor.shape[0]
+#
+#     # Create the frequency grid for f^2 = fx^2 + fy^2
+#     k = 2 * np.pi / wavelength
+#     fx = np.fft.fftfreq(N) * N  # Frequency vector
+#     fy = fx  # Square input assumed
+#     fx, fy = np.meshgrid(fx, fy)  # Create 2D grid
+#     f2 = fx**2 + fy**2
+#
+#     # # Debug Messages
+#     # sqrt_argument = 1 - (1 / 4) * (wavelength / radius) ** 2 * f2
+#     # print("radius:", radius)
+#     # print("wavelength:", wavelength)
+#     # print("min(f2):", np.min(f2))
+#     # print("max(f2):", np.max(f2))
+#     # print("sqrt argument min:", np.min(sqrt_argument))
+#     # print("sqrt argument N elem below zero:", np.sum(sqrt_argument < 0))
+#
+#     # Compute the transfer function H (Goodman Eq. 4-20)
+#     H = np.exp(
+#         1j
+#         * k
+#         * prop_dist
+#         * (
+#             np.sqrt(
+#                 np.maximum(0, 1 - (1 / 4) * (wavelength / radius) ** 2 * f2)
+#                 - 0
+#             )
+#         )
+#     )
+#
+#     # Perform the  propagation
+#     phasor = np.fft.ifft2(np.fft.fft2(phasor) * H)
+#
+#     # Un-pad the array
+#     # phasor = phasor[Npad:-Npad, Npad:-Npad]
+#
+#     return phasor
