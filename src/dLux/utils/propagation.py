@@ -3,7 +3,7 @@ from jax import Array, vmap
 import dLux.utils as dlu
 
 
-__all__ = ["FFT", "MFT", "fresnel_MFT"]
+__all__ = ["FFT", "MFT", "fresnel_MFT", "fresnel_phase_factors"]
 
 
 def FFT(
@@ -405,4 +405,107 @@ def fresnel_MFT(
     )
 
     phasor *= second_factor
+    return phasor
+
+
+def fresnel_transfer_function(
+    N: int, wavelength: float, diameter: float, prop_dist: float, pad: int = 2
+) -> Array:
+    """
+    Computes the Fresnel angular spectrum transfer function quickly.
+
+    Parameters
+    ----------
+    N : int
+        Size of the input phasor array (before padding).
+    wavelength : float
+        Wavelength in meters.
+    diameter : float
+        Diameter of the aperture in meters.
+    prop_dist : float
+        Propagation distance in meters.
+    pad : int
+        Padding factor applied to the input array.
+
+    Returns
+    -------
+    H : np.ndarray
+        The complex Fresnel transfer function.
+    """
+    Npad = N * pad
+    radius = (pad * diameter) / 2
+    k = 2 * np.pi / wavelength
+
+    fx = np.fft.fftfreq(Npad) * Npad
+    fy = fx.copy()
+
+    # Compute 1D components separately
+    fx2 = fx**2
+    fy2 = fy**2
+
+    sqrt_arg_fx = 1 - (1 / 4) * (wavelength / radius) ** 2 * fx2
+    sqrt_arg_fy = 1 - (1 / 4) * (wavelength / radius) ** 2 * fy2
+
+    # Avoid negative sqrt
+    sqrt_arg_fx = np.maximum(0, sqrt_arg_fx)
+    sqrt_arg_fy = np.maximum(0, sqrt_arg_fy)
+
+    # Exponential components
+    tfx = np.exp(1j * k * prop_dist * (np.sqrt(sqrt_arg_fx) - 0))
+    tfy = np.exp(1j * k * prop_dist * (np.sqrt(sqrt_arg_fy) - 0))
+
+    # Outer product to form the 2D transfer function
+    H = np.outer(tfy, tfx)
+
+    return H
+
+
+def fresnel_AS(
+    phasor: Array,
+    wavelength: float,
+    diameter: float,
+    prop_dist: float,
+    pad: int = 2,
+    transfer_function: Array = None,
+) -> np.ndarray:
+    """
+    Performs Fresnel propagation by multiplication of the angular spectrum
+    by the transfer function.
+
+    Parameters
+    ----------
+    phasor : np.ndarray
+        The input phasor (complex array).
+    wavelength : float
+        Wavelength of the input phasor (meters).
+    diameter : float
+        Diameter of the input phasor array (meters).
+    prop_dist : float
+        Distance to propagate (meters).
+    pad : int, optional
+        Padding factor for the input array before propagation. Default is 2.
+    transfer_function : np.ndarray, optional
+        Precomputed Fresnel transfer function. If None, it is computed internally.
+
+    Returns
+    -------
+    phasor : np.ndarray
+        The propagated phasor.
+    """
+
+    # Pad the input array
+    pad = int(pad)
+    N = phasor.shape[0]
+    Npad = (N * (pad - 1)) // 2
+    phasor = np.pad(phasor, Npad)
+
+    # Compute the transfer function if not provided
+    if transfer_function is None:
+        transfer_function = fresnel_transfer_function(
+            N, wavelength, diameter, prop_dist, pad=pad
+        )
+
+    # Perform the propagation
+    phasor = np.fft.ifft2(np.fft.fft2(phasor) * transfer_function)
+
     return phasor
