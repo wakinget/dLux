@@ -6,6 +6,8 @@ from jax import Array
 from zodiax import filter_vmap, Base
 from typing import Union, Any
 import dLux.utils as dlu
+import jax
+from dLux.layers import TransmissiveLayer, AberratedLayer, BasisLayer
 
 
 __all__ = [
@@ -13,6 +15,7 @@ __all__ = [
     "AngularOpticalSystem",
     "CartesianOpticalSystem",
     "LayeredOpticalSystem",
+    "ThreePlaneOpticalSystem",
 ]
 
 from .layers.optical_layers import OpticalLayer
@@ -625,3 +628,454 @@ class CartesianOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         if return_wf:
             return wf
         return wf.psf
+
+
+def scale_layer(layer_in, pixel_scale_in, pixel_scale_out, npix_out):
+    """
+    Scales an optical layer to a new resolution and pixel scale.
+
+    Supports TransmissiveLayer, AberratedLayer, and BasisLayer.
+    """
+    scale_factor = pixel_scale_out / pixel_scale_in
+    new_layer = layer_in
+
+    # --- Transmissive Component ---
+    if isinstance(layer_in, TransmissiveLayer):
+        transmission = layer_in.transmission
+        if transmission is not None:
+            if transmission.ndim != 2:
+                raise ValueError(
+                    f"TransmissiveLayer transmission must be 2D "
+                    f"(got shape {transmission.shape})"
+                )
+            scaled = dlu.scale(transmission, npix_out, scale_factor)
+            new_layer = new_layer.set("transmission", scaled)
+
+    # --- Aberrated Component ---
+    if isinstance(layer_in, AberratedLayer):
+        if layer_in.opd is not None:
+            if layer_in.opd.ndim != 2:
+                raise ValueError(
+                    f"AberratedLayer opd must be 2D, got shape {layer_in.opd.shape}"
+                )
+            scaled_opd = dlu.scale(layer_in.opd, npix_out, scale_factor)
+            new_layer = new_layer.set("opd", scaled_opd)
+
+        if layer_in.phase is not None:
+            if layer_in.phase.ndim != 2:
+                raise ValueError(
+                    f"AberratedLayer phase must be 2D, got shape {layer_in.phase.shape}"
+                )
+            scaled_phase = dlu.scale(layer_in.phase, npix_out, scale_factor)
+            new_layer = new_layer.set("phase", scaled_phase)
+
+    # --- Basis Component ---
+    if isinstance(layer_in, BasisLayer):
+        basis = layer_in.basis
+        if basis is not None:
+            if basis.ndim != 3:
+                raise ValueError(
+                    "BasisLayer basis must be a 3D array [n_modes, H, W]"
+                )
+            scale_fn = jax.vmap(dlu.scale, (0, None, None))
+            scaled_basis = scale_fn(basis, npix_out, scale_factor)
+            new_layer = new_layer.set("basis", scaled_basis)
+
+    # --- Final Return ---
+    if new_layer is not layer_in:
+        return new_layer
+
+    # If no recognized layers were scaled
+    raise TypeError(f"Unsupported layer type: {type(layer_in)}")
+
+
+class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
+    """
+    An extension to the LayeredOpticalSystem class that propagates a wavefront to an
+    intermediate plane before propagating to the image plane with `psf_pixel_scale`
+    in units of arcseconds.
+
+    # TODO: Modify the unit test for this class to actually test specific methods
+    # TODO: Create a UML png image describing the inheritence of this class
+
+    ??? abstract "UML"
+        ![UML](../../assets/uml/AngularOpticalSystem.png)
+
+    Attributes
+    ----------
+    wf_npixels : int
+        The number of pixels representing the wavefront.
+    p1_diameter : Array, metres
+        The diameter of the first plane.
+    p2_diameter : Array, metres
+        The diameter of the second plane.
+    p1_layers : OrderedDict
+        A series of `OpticalLayer` transformations to apply at plane 1.
+    p2_layers : OrderedDict
+            A series of `OpticalLayer` transformations to apply at plane 2.
+    separation : float, metres
+            The physical distance between plane 1 and plane 2
+    magnification : float
+            The magnification at plane 1, affects the propagation distance
+    psf_npixels : int
+        The number of pixels of the final PSF.
+    psf_pixel_scale : float, arcseconds
+        The pixel scale of the final PSF.
+    oversample : int
+        The oversampling factor of the final PSF. Decreases the psf_pixel_scale
+        parameter while increasing the psf_npixels parameter.
+    """
+
+    p1_diameter: None
+    p2_diameter: None
+    p1_layers: OrderedDict
+    p2_layers: OrderedDict
+    plane_separation: None
+    magnification: None
+    pad_factor: None
+
+    def __init__(
+        self: OpticalSystem,
+        wf_npixels: int,
+        p1_diameter: float,
+        p2_diameter: float,
+        p1_layers: list[OpticalLayer, tuple],
+        p2_layers: list[OpticalLayer, tuple],
+        plane_separation: float,
+        magnification: float,
+        psf_npixels: int,
+        psf_pixel_scale: float,
+        oversample: int = 1,
+    ):
+        """
+        Parameters
+        ----------
+        wf_npixels : int
+            The number of pixels representing the wavefront.
+        p1_diameter : Array, metres
+            The diameter of the first plane.
+        p2_diameter : Array, metres
+            The diameter of the second plane.
+        p1_layers : list[OpticalLayer, tuple]
+            A list of `OpticalLayer` transformations to apply at the pupil. The list
+            entries can be either `OpticalLayer` objects or tuples of (key, layer) to
+            specify a key for the layer in the layers dictionary.
+        p2_layers : list[OpticalLayer, tuple]
+            A list of `OpticalLayer` transformations to apply at plane 2. The list
+            entries can be either `OpticalLayer` objects or tuples of (key, layer) to
+            specify a key for the layer in the layers dictionary.
+        plane_separation : float, metres
+            The physical distance between plane 1 and plane 2
+        magnification : float
+            The magnification at plane 1, affects the propagation distance
+        psf_npixels : int
+            The number of pixels of the final PSF.
+        psf_pixel_scale : float, arcseconds
+            The pixel scale of the final PSF in units of arcseconds.
+        oversample : int
+            The oversampling factor of the final PSF. Decreases the psf_pixel_scale
+            parameter while increasing the psf_npixels parameter.
+        """
+
+        self.p1_diameter = float(p1_diameter)
+        self.p2_diameter = float(p2_diameter)
+        self.p1_layers = dlu.list2dictionary(p1_layers, True, OpticalLayer)
+        self.p2_layers = dlu.list2dictionary(p2_layers, True, OpticalLayer)
+        self.plane_separation = float(plane_separation)
+        self.magnification = float(magnification)
+
+        # Calculate the pad_factor for propagation to P2
+        self.pad_factor = int(
+            np.ceil((self.p2_diameter * self.magnification) / self.p1_diameter)
+        )
+
+        super().__init__(
+            wf_npixels=wf_npixels,
+            diameter=p1_diameter,
+            layers=[],
+            psf_npixels=psf_npixels,
+            psf_pixel_scale=psf_pixel_scale,
+            oversample=oversample,
+        )
+
+    def __getattr__(self, key: str):
+        # Search both p1_layers and p2_layers for a direct key match
+        for layer_dict in (self.p1_layers, self.p2_layers):
+            if key in layer_dict:
+                return layer_dict[key]
+
+            # Search inside each layer for an attribute with that key
+            for layer in layer_dict.values():
+                if hasattr(layer, key):
+                    return getattr(layer, key)
+
+        raise AttributeError(
+            f"{self.__class__.__name__} has no attribute '{key}'."
+        )
+
+    def insert_layer(
+        self: OpticalSystem,
+        layer: Union[OpticalLayer, tuple],
+        index: int,
+        plane_index: int,  # Updated argument name
+    ) -> OpticalSystem:
+        """
+        Inserts a layer into the specified plane's layers at a given index.
+
+        Parameters
+        ----------
+        layer : OpticalLayer or tuple
+            The layer to insert. Can be a tuple (key, layer) to specify a key.
+        index : int
+            The index at which to insert the layer.
+        plane_index : int
+            The index of the plane where the layer should be inserted. `0` or `1`.
+
+        Returns
+        -------
+        optical_system : OpticalSystem
+            The updated optical system.
+        """
+        if plane_index == 0:
+            updated_layers = dlu.insert_layer(
+                self.p1_layers, layer, index, OpticalLayer
+            )
+            return self.set("p1_layers", updated_layers)
+        elif plane_index == 1:
+            updated_layers = dlu.insert_layer(
+                self.p2_layers, layer, index, OpticalLayer
+            )
+            return self.set("p2_layers", updated_layers)
+        else:
+            raise ValueError("Invalid plane_index. Must be 0 or 1.")
+
+    def remove_layer(
+        self: OpticalSystem, key: str, plane_index: int
+    ) -> OpticalSystem:
+        """
+        Removes a layer from the specified plane's layers.
+
+        Parameters
+        ----------
+        key : str
+            The key of the layer to remove.
+        plane : int
+            The plane where the layer should be removed. Must be `0` or `1`.
+
+        Returns
+        -------
+        optical_system : OpticalSystem
+            The updated optical system.
+        """
+        if plane_index == 0:
+            updated_layers = dlu.remove_layer(self.p1_layers, key)
+            return self.set("p1_layers", updated_layers)
+        elif plane_index == 1:
+            updated_layers = dlu.remove_layer(self.p2_layers, key)
+            return self.set("p2_layers", updated_layers)
+        else:
+            raise ValueError("Invalid plane_index. Must be 0 or 1.")
+
+    def propagate_mono(
+        self: OpticalSystem,
+        wavelength: Array,
+        offset: Array = np.zeros(2),
+        return_wf: bool = False,
+    ) -> Array:
+        """
+        Custom propagation using hybrid Fresnel/MFT logic:
+        - Apply p1 layers (M1).
+        - Fresnel propagate to M2.
+        - Dynamically apply scaled aperture at M2.
+        - Back-propagate to image of M1.
+        - Final MFT propagation to the focal plane.
+        """
+        # === Initialize M1 wavefront ===
+        wf = Wavefront(self.wf_npixels, self.p1_diameter, wavelength)
+        wf = wf.tilt(offset)
+
+        # === Apply layers at M1 ===
+        for layer in list(self.p1_layers.values()):
+            wf *= layer
+
+        # === Propagate to M2 using Fresnel_AS ===
+        prop_dist = self.plane_separation * self.magnification
+        self.p2_diameter * self.magnification / self.p1_diameter
+        # pad = np.ceil(m2_oversize).astype(int)
+        wf = wf.propagate_fresnel_AS(
+            prop_dist, pad=self.pad_factor
+        )  # wf now has pad*wf_npixels
+
+        # === Apply layers at M2 ===
+        ps_in = (
+            self.p2_diameter * self.magnification / self.wf_npixels
+        )  # Pixel Scale in
+        ps_out = self.p1_diameter / self.wf_npixels  # Pixel Scale out
+        npix_out = self.pad_factor * self.wf_npixels
+        for layer in list(self.p2_layers.values()):
+            scaled_layer = scale_layer(
+                layer, ps_in, ps_out, npix_out
+            )  # scaled_layer has pad*wf_npixels
+            wf *= scaled_layer
+
+        # === Back-propagate to pupil plane ===
+        wf = wf.propagate_fresnel_AS(
+            -prop_dist, pad=1
+        )  # wf still has pad*wf_npixels
+
+        # === Resize to original pupil size ===
+        wf = wf.resize(self.wf_npixels)  # Crops down to original wf_npixels
+
+        # === Final MFT propagation to PSF ===
+        true_pixel_scale = self.psf_pixel_scale / self.oversample
+        pixel_scale_rad = dlu.arcsec2rad(true_pixel_scale)
+        psf_npixels = self.psf_npixels * self.oversample
+        wf = wf.propagate(psf_npixels, pixel_scale_rad)
+
+        if return_wf:
+            return wf
+        return wf.psf
+
+    def prop_mono_to_p2(
+        self: OpticalSystem,
+        wavelength: Array,
+        offset: Array = np.zeros(2),
+        return_wf: bool = False,
+    ) -> Array:
+        """
+        Propagates a monochromatic point source through the first optical plane and
+        stops at the second optical plane.
+
+        Parameters
+        ----------
+        wavelength : float, metres
+            The wavelength of the wavefront to propagate through the optical layers.
+        offset : Array, radians = np.zeros(2)
+            The (x, y) offset from the optical axis of the source.
+        return_wf: bool = False
+            Should the Wavefront object be returned instead of the psf Array?
+
+        Returns
+        -------
+        object : Array, Wavefront
+            if `return_wf` is False, returns the PSF Array at Plane 2.
+            if `return_wf` is True, returns the Wavefront object at Plane 2.
+        """
+
+        # === Initialize M1 wavefront ===
+        wf = Wavefront(self.wf_npixels, self.p1_diameter, wavelength)
+        wf = wf.tilt(offset)
+
+        # === Apply layers at M1 ===
+        for layer in list(self.p1_layers.values()):
+            wf *= layer
+
+        # === Propagate to M2 using Fresnel_AS ===
+        prop_dist = self.plane_separation * self.magnification
+        self.p2_diameter * self.magnification / self.p1_diameter
+        # pad = np.ceil(m2_oversize).astype(int)
+        wf = wf.propagate_fresnel_AS(
+            prop_dist, pad=self.pad_factor
+        )  # wf now has pad*wf_npixels
+
+        # === Apply layers at M2 ===
+        ps_in = (
+            self.p2_diameter * self.magnification / self.wf_npixels
+        )  # Pixel Scale in
+        ps_out = self.p1_diameter / self.wf_npixels  # Pixel Scale out
+        npix_out = self.pad_factor * self.wf_npixels
+        for layer in list(self.p2_layers.values()):
+            scaled_layer = scale_layer(
+                layer, ps_in, ps_out, npix_out
+            )  # scaled_layer has pad*wf_npixels
+            wf *= scaled_layer
+
+        # === Scale to the size of the Secondary ===
+        wf = wf.scale_to(self.wf_npixels, ps_in)
+        wf = wf.set("pixel_scale", self.p2_diameter / self.wf_npixels)
+
+        # Return PSF or Wavefront at Plane 2
+        if return_wf:
+            return wf
+        return wf.psf
+
+    def prop_to_p2(
+        self: OpticalSystem,
+        wavelengths: Array,
+        offset: Array = np.zeros(2),
+        weights: Array = None,
+        return_wf: bool = False,
+        return_psf: bool = False,
+    ) -> Array:
+        """
+        Propagates a polychromatic point source to the second optical plane.
+
+        Parameters
+        ----------
+        wavelengths : Array, metres
+            The wavelengths of the wavefronts to propagate through the optics.
+        offset : Array, radians = np.zeros(2)
+            The (x, y) offset from the optical axis of the source.
+        weights : Array = None
+            The weight of each wavelength. If None, all weights are equal.
+        return_wf : bool = False
+            Should the Wavefront object be returned instead of the psf Array?
+        return_psf : bool = False
+            Should the PSF object be returned instead of the psf Array?
+
+        Returns
+        -------
+        object : Array, Wavefront, PSF
+            if `return_wf` is False and `return_psf` is False, returns the PSF Array.
+            if `return_wf` is True, returns a stack of Wavefronts.
+            if `return_psf` is True, returns a PSF object (psf and pixel scale).
+        """
+        if return_wf and return_psf:
+            raise ValueError(
+                "return_wf and return_psf cannot both be True. Please choose one."
+            )
+
+        wavelengths = np.atleast_1d(wavelengths)
+
+        # Handle weights
+        if weights is None:
+            weights = np.ones_like(wavelengths) / len(wavelengths)
+        else:
+            weights = np.atleast_1d(weights)
+
+        if weights.shape != wavelengths.shape:
+            raise ValueError(
+                "wavelengths and weights must have the same shape, "
+                f"got {wavelengths.shape} and {weights.shape}."
+            )
+
+        # Handle offset
+        offset = np.array(offset) if not isinstance(offset, Array) else offset
+        if offset.ndim == 1:
+            offset = np.broadcast_to(offset, (wavelengths.shape[0], 2))
+        elif offset.shape != (wavelengths.shape[0], 2):
+            raise ValueError(
+                "offset must be shape (2,) or (n, 2) matching wavelengths. "
+                f"Got shape {offset.shape}."
+            )
+
+        # Propagation function (amplitude-weighted)
+        prop_fn = lambda wl, wt, off: self.prop_mono_to_p2(
+            wl, off, return_wf=True
+        ).multiply("amplitude", wt**0.5)
+        # wf_stack = jax.vmap(prop_fn)(wavelengths, weights, offset)
+        wf_stack = filter_vmap(prop_fn)(wavelengths, weights, offset)
+
+        # # Calculate - note we multiply by sqrt(weight) to account for the
+        # # fact that the PSF is the square of the amplitude
+        # prop_fn = lambda wavelength, weight: self.propagate_mono_to_plane(
+        #     wavelength, offset, plane_index, return_wf=True
+        # ).multiply("amplitude", weight**0.5)
+        # wf = filter_vmap(prop_fn)(wavelengths, weights)
+
+        # Output format
+        if return_wf:
+            return wf_stack
+        if return_psf:
+            return PSF(wf_stack.psf.sum(0), wf_stack.pixel_scale.mean())
+        return wf_stack.psf.sum(0)
