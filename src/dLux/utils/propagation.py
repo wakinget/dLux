@@ -411,7 +411,7 @@ def fresnel_MFT(
 def fresnel_AS_transfer_function(
     N: int, wavelength: float, diameter: float, prop_dist: float, pad: int = 2
 ) -> Array:
-    """
+    r"""
     Computes the Fresnel Angular Spectrum (AS) transfer function efficiently.
 
     This routine computes the transfer function as described in Section 4.2.3
