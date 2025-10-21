@@ -3,7 +3,7 @@ from jax import Array, vmap
 import dLux.utils as dlu
 
 
-__all__ = ["FFT", "MFT", "fresnel_MFT", "fresnel_phase_factors"]
+__all__ = ["FFT", "MFT", "fresnel_MFT", "fresnel_AS", "fresnel_phase_factors"]
 
 
 def FFT(
@@ -408,16 +408,24 @@ def fresnel_MFT(
     return phasor
 
 
-def fresnel_transfer_function(
+def fresnel_AS_transfer_function(
     N: int, wavelength: float, diameter: float, prop_dist: float, pad: int = 2
 ) -> Array:
     """
-    Computes the Fresnel angular spectrum transfer function quickly.
+    Computes the Fresnel Angular Spectrum (AS) transfer function efficiently.
+
+    This routine computes the transfer function as described in Section 4.2.3
+    of Goodman's Introduction to Fourier Optics and given in EQ 4-20.
+
+    This routine additionally invokes the paraxial approximation to make the
+    kernel separable in X and Y. Under this approximation, the 2D angular
+    spectrum transfer function can be expressed as the outer product of two 1D
+    factors, enabling a much faster and memory-efficient computation.
 
     Parameters
     ----------
     N : int
-        Size of the input phasor array (before padding).
+        Size of the input phasor array (before padding, assumes square array).
     wavelength : float
         Wavelength in meters.
     diameter : float
@@ -430,34 +438,37 @@ def fresnel_transfer_function(
     Returns
     -------
     H : np.ndarray
-        The complex Fresnel transfer function.
+        The (padded) complex Fresnel transfer function.
+
+    Notes
+    -----
+    - The paraxial form used here assumes small propagation angles,
+      i.e. :math:`(\lambda f_x)^2 + (\lambda f_y)^2 \ll 1`, such that
+      :math:`\sqrt{1 - (\lambda f_x)^2 - (\lambda f_y)^2}
+      \approx 1 - \tfrac{1}{2}(\lambda^2 f_x^2 + \lambda^2 f_y^2)`.
+    - This allows the kernel to be written as a separable product of
+      1D terms, reducing computational cost from :math:`\mathcal{O}(N^2)`
+      to :math:`\mathcal{O}(2N)` operations.
+    - For wide-angle propagation, use the full non-separable form.
     """
     Npad = N * pad
     radius = (pad * diameter) / 2
     k = 2 * np.pi / wavelength
 
-    fx = np.fft.fftfreq(Npad) * Npad
-    fy = fx.copy()
+    # 1D spatial frequencies (square grid -> same in x and y)
+    f = np.fft.fftfreq(Npad) * Npad
 
-    # Compute 1D components separately
-    fx2 = fx**2
-    fy2 = fy**2
-
-    sqrt_arg_fx = 1 - (1 / 4) * (wavelength / radius) ** 2 * fx2
-    sqrt_arg_fy = 1 - (1 / 4) * (wavelength / radius) ** 2 * fy2
+    # Compute the sqrt argument in Goodman EQ 4-20
+    sqrt_arg = 1 - (1 / 4) * (wavelength / radius) ** 2 * f**2
 
     # Avoid negative sqrt
-    sqrt_arg_fx = np.maximum(0, sqrt_arg_fx)
-    sqrt_arg_fy = np.maximum(0, sqrt_arg_fy)
+    sqrt_arg = np.maximum(0, sqrt_arg)
 
-    # Exponential components
-    tfx = np.exp(1j * k * prop_dist * (np.sqrt(sqrt_arg_fx) - 0))
-    tfy = np.exp(1j * k * prop_dist * (np.sqrt(sqrt_arg_fy) - 0))
+    # Take the exponential
+    tf = np.exp(1j * k * prop_dist * np.sqrt(sqrt_arg))
 
     # Outer product to form the 2D transfer function
-    H = np.outer(tfy, tfx)
-
-    return H
+    return np.outer(tf, tf)
 
 
 def fresnel_AS(
@@ -469,8 +480,10 @@ def fresnel_AS(
     transfer_function: Array = None,
 ) -> np.ndarray:
     """
-    Performs Fresnel propagation by multiplication of the angular spectrum
-    by the transfer function.
+    Performs Fresnel propagation using the Angular Spectrum (AS) method.
+
+    NOTE: The output array is padded according to the pad parameter, and
+    generally will not be the same size as the input array
 
     Parameters
     ----------
@@ -490,7 +503,7 @@ def fresnel_AS(
     Returns
     -------
     phasor : np.ndarray
-        The propagated phasor.
+        The propagated (and padded) phasor.
     """
 
     # Pad the input array
@@ -501,7 +514,7 @@ def fresnel_AS(
 
     # Compute the transfer function if not provided
     if transfer_function is None:
-        transfer_function = fresnel_transfer_function(
+        transfer_function = fresnel_AS_transfer_function(
             N, wavelength, diameter, prop_dist, pad=pad
         )
 
