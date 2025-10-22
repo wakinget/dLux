@@ -53,6 +53,7 @@ from .helpers import (
     list2dictionary as list2dictionary,
     insert_layer as insert_layer,
     remove_layer as remove_layer,
+    scale_layer as scale_layer,
 )
 from .interpolation import (
     generate_coordinates as generate_coordinates,

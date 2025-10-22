@@ -6,8 +6,6 @@ from jax import Array
 from zodiax import filter_vmap, Base
 from typing import Union, Any
 import dLux.utils as dlu
-import jax
-from dLux.layers import TransmissiveLayer, AberratedLayer, BasisLayer
 
 
 __all__ = [
@@ -630,65 +628,6 @@ class CartesianOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         return wf.psf
 
 
-def scale_layer(layer_in, pixel_scale_in, pixel_scale_out, npix_out):
-    """
-    Scales an optical layer to a new resolution and pixel scale.
-
-    Supports TransmissiveLayer, AberratedLayer, and BasisLayer.
-    """
-    scale_factor = pixel_scale_out / pixel_scale_in
-    new_layer = layer_in
-
-    # --- Transmissive Component ---
-    if isinstance(layer_in, TransmissiveLayer):
-        transmission = layer_in.transmission
-        if transmission is not None:
-            if transmission.ndim != 2:
-                raise ValueError(
-                    f"TransmissiveLayer transmission must be 2D "
-                    f"(got shape {transmission.shape})"
-                )
-            scaled = dlu.scale(transmission, npix_out, scale_factor)
-            new_layer = new_layer.set("transmission", scaled)
-
-    # --- Aberrated Component ---
-    if isinstance(layer_in, AberratedLayer):
-        if layer_in.opd is not None:
-            if layer_in.opd.ndim != 2:
-                raise ValueError(
-                    f"AberratedLayer opd must be 2D, got shape {layer_in.opd.shape}"
-                )
-            scaled_opd = dlu.scale(layer_in.opd, npix_out, scale_factor)
-            new_layer = new_layer.set("opd", scaled_opd)
-
-        if layer_in.phase is not None:
-            if layer_in.phase.ndim != 2:
-                raise ValueError(
-                    f"AberratedLayer phase must be 2D, got shape {layer_in.phase.shape}"
-                )
-            scaled_phase = dlu.scale(layer_in.phase, npix_out, scale_factor)
-            new_layer = new_layer.set("phase", scaled_phase)
-
-    # --- Basis Component ---
-    if isinstance(layer_in, BasisLayer):
-        basis = layer_in.basis
-        if basis is not None:
-            if basis.ndim != 3:
-                raise ValueError(
-                    "BasisLayer basis must be a 3D array [n_modes, H, W]"
-                )
-            scale_fn = jax.vmap(dlu.scale, (0, None, None))
-            scaled_basis = scale_fn(basis, npix_out, scale_factor)
-            new_layer = new_layer.set("basis", scaled_basis)
-
-    # --- Final Return ---
-    if new_layer is not layer_in:
-        return new_layer
-
-    # If no recognized layers were scaled
-    raise TypeError(f"Unsupported layer type: {type(layer_in)}")
-
-
 class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     """
     An extension to the LayeredOpticalSystem class that propagates a wavefront to an
@@ -900,8 +839,6 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
 
         # === Propagate to M2 using Fresnel_AS ===
         prop_dist = self.plane_separation * self.magnification
-        self.p2_diameter * self.magnification / self.p1_diameter
-        # pad = np.ceil(m2_oversize).astype(int)
         wf = wf.propagate_fresnel_AS(
             prop_dist, pad=self.pad_factor
         )  # wf now has pad*wf_npixels
@@ -913,7 +850,7 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         ps_out = self.p1_diameter / self.wf_npixels  # Pixel Scale out
         npix_out = self.pad_factor * self.wf_npixels
         for layer in list(self.p2_layers.values()):
-            scaled_layer = scale_layer(
+            scaled_layer = dlu.scale_layer(
                 layer, ps_in, ps_out, npix_out
             )  # scaled_layer has pad*wf_npixels
             wf *= scaled_layer
@@ -985,14 +922,16 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         ps_out = self.p1_diameter / self.wf_npixels  # Pixel Scale out
         npix_out = self.pad_factor * self.wf_npixels
         for layer in list(self.p2_layers.values()):
-            scaled_layer = scale_layer(
+            scaled_layer = dlu.scale_layer(
                 layer, ps_in, ps_out, npix_out
             )  # scaled_layer has pad*wf_npixels
             wf *= scaled_layer
 
         # === Scale to the size of the Secondary ===
         wf = wf.scale_to(self.wf_npixels, ps_in)
-        wf = wf.set("pixel_scale", self.p2_diameter / self.wf_npixels)
+        wf = wf.set(
+            "pixel_scale", np.asarray(self.p2_diameter / self.wf_npixels)
+        )
 
         # Return PSF or Wavefront at Plane 2
         if return_wf:
@@ -1065,13 +1004,6 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         ).multiply("amplitude", wt**0.5)
         # wf_stack = jax.vmap(prop_fn)(wavelengths, weights, offset)
         wf_stack = filter_vmap(prop_fn)(wavelengths, weights, offset)
-
-        # # Calculate - note we multiply by sqrt(weight) to account for the
-        # # fact that the PSF is the square of the amplitude
-        # prop_fn = lambda wavelength, weight: self.propagate_mono_to_plane(
-        #     wavelength, offset, plane_index, return_wf=True
-        # ).multiply("amplitude", weight**0.5)
-        # wf = filter_vmap(prop_fn)(wavelengths, weights)
 
         # Output format
         if return_wf:
