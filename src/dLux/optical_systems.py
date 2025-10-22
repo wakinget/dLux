@@ -634,7 +634,8 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     intermediate plane before propagating to the image plane with `psf_pixel_scale`
     in units of arcseconds.
 
-    # TODO: Create a UML png image describing the inheritence of this class
+    ??? abstract "UML"
+        ![UML](../../assets/uml/ThreePlaneOpticalSystem.png)
 
     Attributes
     ----------
