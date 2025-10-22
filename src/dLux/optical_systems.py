@@ -794,7 +794,7 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         ----------
         key : str
             The key of the layer to remove.
-        plane : int
+        plane_index : int
             The plane where the layer should be removed. Must be `0` or `1`.
 
         Returns

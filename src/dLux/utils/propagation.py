@@ -443,12 +443,17 @@ def fresnel_AS_transfer_function(
     Notes
     -----
     - The paraxial form used here assumes small propagation angles,
-      i.e. :math:`(\lambda f_x)^2 + (\lambda f_y)^2 \ll 1`, such that
-      :math:`\sqrt{1 - (\lambda f_x)^2 - (\lambda f_y)^2}
-      \approx 1 - \tfrac{1}{2}(\lambda^2 f_x^2 + \lambda^2 f_y^2)`.
+      i.e. $(\lambda f_x)^2 + (\lambda f_y)^2 \ll 1$, such that:
+
+      $$
+      \sqrt{1 - (\lambda f_x)^2 - (\lambda f_y)^2}
+      \approx 1 - \frac{1}{2}(\lambda^2 f_x^2 + \lambda^2 f_y^2).
+      $$
+
     - This allows the kernel to be written as a separable product of
-      1D terms, reducing computational cost from :math:`\mathcal{O}(N^2)`
-      to :math:`\mathcal{O}(2N)` operations.
+      1D terms, reducing computational cost from $\mathcal{O}(N^2)$
+      to $\mathcal{O}(2N)$ operations.
+
     - For wide-angle propagation, use the full non-separable form.
     """
     Npad = N * pad
@@ -482,9 +487,6 @@ def fresnel_AS(
     """
     Performs Fresnel propagation using the Angular Spectrum (AS) method.
 
-    NOTE: The output array is padded according to the pad parameter, and
-    generally will not be the same size as the input array
-
     Parameters
     ----------
     phasor : np.ndarray
@@ -504,6 +506,11 @@ def fresnel_AS(
     -------
     phasor : np.ndarray
         The propagated (and padded) phasor.
+
+    Notes
+    -----
+    - The output array is padded according to the pad parameter, and
+    generally will not be the same size as the input array
     """
 
     # Pad the input array

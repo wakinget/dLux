@@ -61,15 +61,20 @@ plugins:
           paths: [src]
           options:
             docstring_style: "numpy"
-          rendering:
             members_order: source
 
 markdown_extensions:
   - admonition
   - pymdownx.details
   - pymdownx.extra
+  - pymdownx.arithmatex:
+      generic: true
   - toc:
       toc_depth: 2
+
+extra_javascript:
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 # ===== Navigation =====
 nav:

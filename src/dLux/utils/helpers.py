@@ -167,13 +167,46 @@ def remove_layer(layers: dict, key: str) -> dict:
 
 def scale_layer(layer_in, pixel_scale_in, pixel_scale_out, npix_out):
     """
-    Scales an optical layer to a new resolution and pixel scale.
+    Rescale an optical layer to a new pixel scale and array size.
 
-    This helper supports TransmissiveLayer, AberratedLayer, BasisLayer,
-    and Optic. It rescales any defined 2D (or 3D for BasisLayer) fields
-    using dLux.utils.interpolation.scale().
+    This helper function supports `TransmissiveLayer`, `AberratedLayer`,
+    `BasisLayer`, and `Optic` objects. It rescales any defined 2D (or 3D
+    for `BasisLayer`) arrays—such as transmission maps, OPDs, phases,
+    or bases—using the interpolation routine from
+    `dLux.utils.interpolation.scale()`.
+
+    Parameters
+    ----------
+    layer_in : TransmissiveLayer, AberratedLayer, BasisLayer, or Optic
+        The optical layer instance to be rescaled.
+    pixel_scale_in : float
+        The current pixel scale of the input layer.
+    pixel_scale_out : float
+        The target pixel scale for the rescaled layer.
+    npix_out : int
+        The desired output array size.
+
+    Returns
+    -------
+    layer_out : same type as `layer_in`
+        A new instance of the same layer type with rescaled internal
+        arrays and updated resolution.
+
+    Raises
+    ------
+    ValueError
+        If an array on the layer has an unexpected number of dimensions.
+    TypeError
+        If the provided layer type is not one of the supported classes.
+
+    Notes
+    -----
+    - Scaling is applied only to defined fields (e.g., `opd`, `phase`,
+      `transmission`, or `basis`).
+    - Unsupported layer types will raise a `TypeError`.
+    - This function imports layer classes locally to avoid circular
+      dependencies within the `dLux` module.
     """
-    # Importing locally avoids circular dependencies
     from dLux.layers import (
         TransmissiveLayer,
         AberratedLayer,
