@@ -824,6 +824,13 @@ class Wavefront(Base):
             The propagated wavefront.
         """
 
+        # Require Cartesian units (i.e., Pupil or already-Intermediate usage)
+        if self.units != "Cartesian":
+            raise ValueError(
+                f"propagate_fresnel_AS requires Cartesian units; "
+                f"got plane={self.plane}, units={self.units}."
+            )
+
         # Update the plane, pixel scale, and units
         plane = "Intermediate"
         pixel_scale = self.pixel_scale
