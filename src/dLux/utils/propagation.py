@@ -3,7 +3,7 @@ from jax import Array, vmap
 import dLux.utils as dlu
 
 
-__all__ = ["FFT", "MFT", "fresnel_MFT", "fresnel_AS", "fresnel_phase_factors"]
+__all__ = ["FFT", "MFT", "fresnel_MFT", "fresnel_AS"]
 
 
 def FFT(
