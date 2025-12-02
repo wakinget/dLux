@@ -13,7 +13,7 @@ __all__ = [
     "AngularOpticalSystem",
     "CartesianOpticalSystem",
     "LayeredOpticalSystem",
-    "ThreePlaneOpticalSystem",
+    "ConvergingBeamOpticalSystem",
 ]
 
 from .layers.optical_layers import OpticalLayer
@@ -628,7 +628,9 @@ class CartesianOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
         return wf.psf
 
 
-class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
+class ConvergingBeamOpticalSystem(
+    ParametricOpticalSystem, LayeredOpticalSystem
+):
     """
     An extension to the `LayeredOpticalSystem` class that propagates a wavefront
     through a converging beam to an intermediate pupil plane before propagating
@@ -660,7 +662,7 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     treated as fixed for a given system instance.
 
     ??? abstract "UML"
-        ![UML](../../assets/uml/ThreePlaneOpticalSystem.png)
+        ![UML](../../assets/uml/ConvergingBeamOpticalSystem.png)
 
     Attributes
     ----------

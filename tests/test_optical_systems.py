@@ -6,7 +6,7 @@ from dLux import (
     LayeredOpticalSystem,
     AngularOpticalSystem,
     CartesianOpticalSystem,
-    ThreePlaneOpticalSystem,
+    ConvergingBeamOpticalSystem,
     PointSource,
     Wavefront,
     PSF,
@@ -128,7 +128,7 @@ def test_cartesian_optics(
     _test_propagate_mono(optics)
 
 
-def test_three_plane_optical_system(
+def test_converging_beam_optical_system(
     wf_npixels,
     diameter,
     layers,
@@ -137,7 +137,7 @@ def test_three_plane_optical_system(
     oversample,
 ):
     """
-    Integration test for the `ThreePlaneOpticalSystem` class.
+    Integration test for the `ConvergingBeamOpticalSystem` class.
 
     Verifies correct behavior of layer management, attribute access,
     and partial propagation through both planes. Ensures the class
@@ -154,7 +154,7 @@ def test_three_plane_optical_system(
       - **API compatibility:** runs shared propagation/model tests to confirm
         interface consistency across optical system types.
     """
-    optics = ThreePlaneOpticalSystem(
+    optics = ConvergingBeamOpticalSystem(
         wf_npixels=wf_npixels,
         p1_diameter=diameter,
         p2_diameter=0.15,
@@ -166,7 +166,7 @@ def test_three_plane_optical_system(
         psf_pixel_scale=0.051566,
         oversample=oversample,
     )
-    print("\n--- Initial ThreePlaneOpticalSystem ---")
+    print("\n--- Initial ConvergingBeamOpticalSystem ---")
     print(optics)
 
     # ----------------------------
