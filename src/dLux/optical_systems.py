@@ -787,12 +787,8 @@ class ConvergingBeamOpticalSystem(
         self.magnification = float(magnification)
 
         # Compute pad_factor for propagation to P2
-        primary, secondary = self.plane_names
         self.pad_factor = int(
-            np.ceil(
-                (self.diameter[secondary] * self.magnification)
-                / self.diameter[primary]
-            )
+            np.ceil((p2_diameter * magnification) / p1_diameter)
         )
 
     def __getattr__(self, key: str):
@@ -930,23 +926,17 @@ class ConvergingBeamOpticalSystem(
 
         # === Propagate to secondary using Fresnel_AS ===
         prop_dist = self.plane_separation * self.magnification
-        wf = wf.propagate_fresnel_AS(
-            prop_dist, pad=self.pad_factor
-        )  # wf now has pad * wf_npixels
+        wf = wf.propagate_fresnel_AS(prop_dist, pad=self.pad_factor)
+        # wf now has pad * wf_npixels
 
         # === Apply layers at secondary plane ===
-        ps_in = (
-            p2_diameter * self.magnification / self.wf_npixels
-        )  # pixel scale in
-        ps_out = (
-            p1_diameter / self.wf_npixels
-        )  # pixel scale out (for layer data)
+        ps_in = p2_diameter * self.magnification / self.wf_npixels
+        ps_out = p1_diameter / self.wf_npixels
         npix_out = self.pad_factor * self.wf_npixels
 
         for layer in list(p2_layers.values()):
-            scaled_layer = dlu.scale_layer(
-                layer, ps_in, ps_out, npix_out
-            )  # scaled layer on padded grid
+            # scaled layer on padded grid
+            scaled_layer = dlu.scale_layer(layer, ps_in, ps_out, npix_out)
             wf *= scaled_layer
 
         return wf, p1_diameter, p2_diameter, ps_in
@@ -971,9 +961,8 @@ class ConvergingBeamOpticalSystem(
 
         # === Back-propagate to primary pupil plane ===
         prop_dist = self.plane_separation * self.magnification
-        wf = wf.propagate_fresnel_AS(
-            -prop_dist, pad=1
-        )  # wf still has pad * wf_npixels
+        wf = wf.propagate_fresnel_AS(-prop_dist, pad=1)
+        # wf still has pad * wf_npixels
 
         # === Resize to original pupil size ===
         wf = wf.resize(self.wf_npixels)  # Crops to original wf_npixels
