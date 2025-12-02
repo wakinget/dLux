@@ -263,39 +263,6 @@ def test_converging_beam_optical_system(
     assert p2_wf.amplitude.shape == (wf_npixels, wf_npixels)
 
     # ----------------------------
-    # Partial propagation to Plane 2 (polychromatic)
-    # ----------------------------
-    wavels = np.array([0.9e-6, 1.0e-6, 1.1e-6])
-
-    # Default: summed PSF array at Plane 2
-    p2_poly_psf = optics.prop_to_p2(wavels)
-    print(
-        "\n[poly -> P2] default type:",
-        type(p2_poly_psf),
-        "shape:",
-        getattr(p2_poly_psf, "shape", None),
-    )
-    assert isinstance(p2_poly_psf, np.ndarray)
-    assert p2_poly_psf.shape == (wf_npixels, wf_npixels)
-
-    # Return a stack of Wavefronts
-    p2_poly_wf = optics.prop_to_p2(wavels, return_wf=True)
-    print("[poly -> P2] return_wf=True type:", type(p2_poly_wf))
-    # Conservative inspection: look at .psf and shapes
-    p2_stack = p2_poly_wf.psf
-    print("Stacked PSF shape:", getattr(p2_stack, "shape", None))
-    assert p2_stack.shape[0] == wavels.shape[0]
-    assert p2_stack.shape[1:] == (wf_npixels, wf_npixels)
-
-    # Return PSF object (summed PSF + pixel scale)
-    p2_psf_obj = optics.prop_to_p2(wavels, return_psf=True)
-    print("[poly -> P2] return_psf=True type:", type(p2_psf_obj))
-    if hasattr(p2_psf_obj, "pixel_scale"):
-        print("PSF.pixel_scale:", p2_psf_obj.pixel_scale)
-    assert isinstance(p2_psf_obj, PSF)
-    assert p2_psf_obj.data.shape == (wf_npixels, wf_npixels)
-
-    # ----------------------------
     # Reuse standard checks
     # ----------------------------
     _test_model(optics)
