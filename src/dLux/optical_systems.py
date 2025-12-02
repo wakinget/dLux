@@ -630,9 +630,34 @@ class CartesianOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
 
 class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     """
-    An extension to the LayeredOpticalSystem class that propagates a wavefront to an
-    intermediate plane before propagating to the image plane with `psf_pixel_scale`
-    in units of arcseconds.
+    An extension to the `LayeredOpticalSystem` class that propagates a wavefront
+    through a converging beam to an intermediate pupil plane before propagating
+    to the image plane with `psf_pixel_scale` in units of arcseconds.
+
+    The primary (plane 1) and secondary (plane 2) pupils are related by a
+    geometric pupil magnification factor, `magnification`, which describes how
+    much the converging beam shrinks between the primary mirror and the
+    secondary plane. For a collimated input beam and a primary mirror of focal
+    length `f1`, with the secondary plane located a distance `d` downstream
+    along the converging beam (`0 < d < f1`), the pupil magnification is
+
+        M = 1 / (1 - d / f1),
+
+    so that the beam footprint at the secondary has diameter
+
+        D_secondary = D_primary / M.
+
+    This magnification is used to map diameters, pixel scales and padding
+    between the primary and secondary pupil planes.
+
+    Note
+    ----
+    The `pad_factor` attribute is derived from `magnification` and the primary /
+    secondary diameters at construction time. Because array sizes must remain
+    static for JAX, changing `magnification` or the plane diameters after
+    construction may invalidate the padding assumptions and lead to aliasing or
+    wrap-around. In this implementation `magnification` is intended to be
+    treated as fixed for a given system instance.
 
     ??? abstract "UML"
         ![UML](../../assets/uml/ThreePlaneOpticalSystem.png)
@@ -648,11 +673,21 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
     p1_layers : OrderedDict
         A series of `OpticalLayer` transformations to apply at plane 1.
     p2_layers : OrderedDict
-            A series of `OpticalLayer` transformations to apply at plane 2.
-    separation : float, metres
-            The physical distance between plane 1 and plane 2
+        A series of `OpticalLayer` transformations to apply at plane 2.
+    plane_separation : float, metres
+        The physical distance between plane 1 and plane 2.
     magnification : float
-            The magnification at plane 1, affects the propagation distance
+        Geometric pupil magnification between the primary pupil and the
+        secondary plane, defined as `M = D_primary / D_secondary`. For a
+        primary of focal length `f1` and a secondary plane at distance `d`
+        along the converging beam (`0 < d < f1`), this can be computed as
+        `M = 1 / (1 - d / f1)`. This value is treated as fixed for a given
+        system instance.
+    pad_factor : int
+        Integer padding factor used during Fresnel propagation to ensure the
+        magnified secondary pupil footprint fits within the padded grid. It is
+        computed from `p1_diameter`, `p2_diameter` and `magnification` when the
+        system is constructed and is assumed constant thereafter.
     psf_npixels : int
         The number of pixels of the final PSF.
     psf_pixel_scale : float, arcseconds
@@ -701,9 +736,14 @@ class ThreePlaneOpticalSystem(ParametricOpticalSystem, LayeredOpticalSystem):
             entries can be either `OpticalLayer` objects or tuples of (key, layer) to
             specify a key for the layer in the layers dictionary.
         plane_separation : float, metres
-            The physical distance between plane 1 and plane 2
+            The physical distance between plane 1 and plane 2.
         magnification : float
-            The magnification at plane 1, affects the propagation distance
+            Geometric pupil magnification between the primary pupil and the
+            secondary plane, defined as `M = D_primary / D_secondary`. For a
+            primary of focal length `f1` and a secondary plane at distance `d`
+            along the converging beam (`0 < d < f1`), this can be computed as
+            `M = 1 / (1 - d / f1)`. This value is treated as fixed for a given
+            system instance.
         psf_npixels : int
             The number of pixels of the final PSF.
         psf_pixel_scale : float, arcseconds
