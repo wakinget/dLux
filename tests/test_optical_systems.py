@@ -145,13 +145,13 @@ def test_converging_beam_optical_system(
     correctly implementing its intermediate-plane logic.
 
     The test covers:
-      - **Layer operations:** insertion, removal, invalid plane handling,
+      - Layer operations: insertion, removal, invalid plane handling,
         and attribute lookup via `__getattr__`.
-      - **Monochromatic propagation:** tests `prop_mono_to_p2` for both PSF
+      - Monochromatic propagation: tests `prop_mono_to_p2` for both PSF
         and `Wavefront` outputs.
-      - **Polychromatic propagation:** tests `prop_to_p2` for summed PSF,
+      - Polychromatic propagation: tests `prop_to_p2` for summed PSF,
         stacked `Wavefront`, and `PSF` object outputs.
-      - **API compatibility:** runs shared propagation/model tests to confirm
+      - API compatibility: runs shared propagation/model tests to confirm
         interface consistency across optical system types.
     """
     optics = ConvergingBeamOpticalSystem(
@@ -170,11 +170,27 @@ def test_converging_beam_optical_system(
     print(optics)
 
     # ----------------------------
+    # Check multi-plane attributes
+    # ----------------------------
+    primary, secondary = optics.plane_names
+    assert primary == "primary"
+    assert secondary == "secondary"
+
+    # Diameters are stored per-plane
+    assert optics.diameter[primary] == pytest.approx(diameter)
+    assert optics.diameter[secondary] == pytest.approx(0.15)
+
+    # Layers are stored per-plane
+    assert set(optics.layers.keys()) == {primary, secondary}
+    assert len(optics.layers[primary]) == len(layers)
+    assert len(optics.layers[secondary]) == len(layers)
+
+    # ----------------------------
     # Insert new layers on each plane
     # ----------------------------
     optics = optics.insert_layer(("P1Mask", Optic()), index=0, plane_index=0)
     optics = optics.insert_layer(("P2Mask", Optic()), index=0, plane_index=1)
-    # unlabeled insert on plane 1
+    # unlabeled insert on secondary plane
     optics = optics.insert_layer(Optic(), index=0, plane_index=1)
 
     # invalid plane index should raise
@@ -186,7 +202,11 @@ def test_converging_beam_optical_system(
     print("Has P1Mask:", hasattr(optics, "P1Mask"))
     print("Has P2Mask:", hasattr(optics, "P2Mask"))
 
-    # Query by key
+    # Direct per-plane layer dict checks
+    assert "P1Mask" in optics.layers[primary]
+    assert "P2Mask" in optics.layers[secondary]
+
+    # Query by key via __getattr__
     assert isinstance(optics.P1Mask, Optic)
     assert isinstance(optics.P2Mask, Optic)
 
@@ -203,6 +223,10 @@ def test_converging_beam_optical_system(
     print("\n--- After Layer Removals ---")
     print("Has P1Mask:", hasattr(optics, "P1Mask"))
     print("Has P2Mask:", hasattr(optics, "P2Mask"))
+
+    # Ensure removed from canonical layer maps
+    assert "P1Mask" not in optics.layers[primary]
+    assert "P2Mask" not in optics.layers[secondary]
 
     with pytest.raises(AttributeError):
         _ = optics.P1Mask
