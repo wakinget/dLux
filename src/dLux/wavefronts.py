@@ -787,11 +787,11 @@ class Wavefront(Base):
         ----------
         phasor : Array
             The phasor to propagate.
-        wavelength : float
+        wavelength : float, meters
             The wavelength of the wavefront.
-        diameter : float
+        diameter : float, meters
             The diameter of the phasor
-        prop_dist : float
+        prop_dist : float, meters
             The distance to propagate
         pad : int = 2
             Pad factor for the input phasor
@@ -813,7 +813,7 @@ class Wavefront(Base):
 
         Parameters
         ----------
-        prop_dist : float
+        prop_dist : float, meters
             The distance to propagate
         pad : int = 2
             Pad factor for the input field
