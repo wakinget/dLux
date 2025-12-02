@@ -890,19 +890,29 @@ class ConvergingBeamOpticalSystem(
 
         return self.set("layers", new_layers)
 
-    def propagate_mono(
+    def _propagate_mono_to_secondary_core(
         self: OpticalSystem,
         wavelength: Array,
-        offset: Array = np.zeros(2),
-        return_wf: bool = False,
-    ) -> Array:
+        offset: Array,
+    ) -> tuple[Wavefront, float, float, float]:
         """
-        Custom propagation using hybrid Fresnel/MFT logic:
-        - Apply primary plane layers.
-        - Fresnel propagate to the secondary plane.
-        - Dynamically apply scaled aperture at the secondary plane.
-        - Back-propagate to an image of the primary pupil.
-        - Final MFT propagation to the focal plane.
+        Internal helper: propagate a monochromatic wavefront from the primary
+        pupil to the secondary pupil, applying all primary and secondary
+        layers, and return the Wavefront at the secondary plane on the padded
+        grid.
+
+        Returns
+        -------
+        wf_p2 : Wavefront
+            Wavefront after propagation to and through the secondary plane,
+            still on the padded grid.
+        p1_diameter : float
+            Diameter of the primary pupil in metres.
+        p2_diameter : float
+            Diameter of the secondary pupil in metres.
+        ps_in : float
+            Effective pixel scale (metres per pixel) at the secondary pupil
+            plane before rescaling to the canonical pupil grid.
         """
         primary, secondary = self.plane_names
         p1_diameter = self.diameter[primary]
@@ -922,22 +932,48 @@ class ConvergingBeamOpticalSystem(
         prop_dist = self.plane_separation * self.magnification
         wf = wf.propagate_fresnel_AS(
             prop_dist, pad=self.pad_factor
-        )  # wf now has pad*wf_npixels
+        )  # wf now has pad * wf_npixels
 
         # === Apply layers at secondary plane ===
-        ps_in = p2_diameter * self.magnification / self.wf_npixels
-        ps_out = p1_diameter / self.wf_npixels
+        ps_in = (
+            p2_diameter * self.magnification / self.wf_npixels
+        )  # pixel scale in
+        ps_out = (
+            p1_diameter / self.wf_npixels
+        )  # pixel scale out (for layer data)
         npix_out = self.pad_factor * self.wf_npixels
+
         for layer in list(p2_layers.values()):
             scaled_layer = dlu.scale_layer(
                 layer, ps_in, ps_out, npix_out
-            )  # scaled_layer has pad*wf_npixels
+            )  # scaled layer on padded grid
             wf *= scaled_layer
 
+        return wf, p1_diameter, p2_diameter, ps_in
+
+    def propagate_mono(
+        self: OpticalSystem,
+        wavelength: Array,
+        offset: Array = np.zeros(2),
+        return_wf: bool = False,
+    ) -> Array:
+        """
+        Custom propagation using hybrid Fresnel/MFT logic:
+        - Apply primary plane layers.
+        - Fresnel propagate to the secondary plane.
+        - Dynamically apply scaled aperture at the secondary plane.
+        - Back-propagate to an image of the primary pupil.
+        - Final MFT propagation to the focal plane.
+        """
+        wf, p1_diameter, _, _ = self._propagate_mono_to_secondary_core(
+            wavelength, offset
+        )
+
         # === Back-propagate to primary pupil plane ===
+        prop_dist = self.plane_separation * self.magnification
         wf = wf.propagate_fresnel_AS(
             -prop_dist, pad=1
-        )  # wf still has pad*wf_npixels
+        )  # wf still has pad * wf_npixels
 
         # === Resize to original pupil size ===
         wf = wf.resize(self.wf_npixels)  # Crops to original wf_npixels
@@ -977,41 +1013,17 @@ class ConvergingBeamOpticalSystem(
             if `return_wf` is False, returns the PSF Array at Plane 2.
             if `return_wf` is True, returns the Wavefront object at Plane 2.
         """
-        primary, secondary = self.plane_names
-        p1_diameter = self.diameter[primary]
-        p2_diameter = self.diameter[secondary]
-        p1_layers = self.layers[primary]
-        p2_layers = self.layers[secondary]
+        (
+            wf,
+            p1_diameter,
+            p2_diameter,
+            ps_in,
+        ) = self._propagate_mono_to_secondary_core(wavelength, offset)
 
-        # === Initialize primary wavefront ===
-        wf = Wavefront(self.wf_npixels, p1_diameter, wavelength)
-        wf = wf.tilt(offset)
-
-        # === Apply layers at primary plane ===
-        for layer in list(p1_layers.values()):
-            wf *= layer
-
-        # === Propagate to secondary using Fresnel_AS ===
-        prop_dist = self.plane_separation * self.magnification
-        wf = wf.propagate_fresnel_AS(
-            prop_dist, pad=self.pad_factor
-        )  # wf now has pad*wf_npixels
-
-        # === Apply layers at secondary plane ===
-        ps_in = p2_diameter * self.magnification / self.wf_npixels
-        ps_out = p1_diameter / self.wf_npixels
-        npix_out = self.pad_factor * self.wf_npixels
-        for layer in list(p2_layers.values()):
-            scaled_layer = dlu.scale_layer(
-                layer, ps_in, ps_out, npix_out
-            )  # scaled_layer has pad*wf_npixels
-            wf *= scaled_layer
-
-        # === Scale to the size of the Secondary ===
+        # === Scale to the canonical secondary-pupil grid ===
         wf = wf.scale_to(self.wf_npixels, ps_in)
         wf = wf.set("pixel_scale", np.asarray(p2_diameter / self.wf_npixels))
 
-        # Return PSF or Wavefront at Plane 2
         if return_wf:
             return wf
         return wf.psf
