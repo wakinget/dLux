@@ -755,25 +755,49 @@ class ConvergingBeamOpticalSystem(
             parameter while increasing the psf_npixels parameter.
         """
 
-        self.p1_diameter = float(p1_diameter)
-        self.p2_diameter = float(p2_diameter)
-        self.p1_layers = dlu.list2dictionary(p1_layers, True, OpticalLayer)
-        self.p2_layers = dlu.list2dictionary(p2_layers, True, OpticalLayer)
-        self.plane_separation = float(plane_separation)
-        self.magnification = float(magnification)
-
-        # Calculate the pad_factor for propagation to P2
-        self.pad_factor = int(
-            np.ceil((self.p2_diameter * self.magnification) / self.p1_diameter)
-        )
-
+        # Instantiate the parent class with empty layers
         super().__init__(
             wf_npixels=wf_npixels,
             diameter=p1_diameter,
-            layers=[],
+            layers=[],  # we take over layer handling below
             psf_npixels=psf_npixels,
             psf_pixel_scale=psf_pixel_scale,
             oversample=oversample,
+        )
+
+        # Define the ordered plane names (primary, secondary)
+        self.plane_names = ("primary", "secondary")
+
+        # Reuse the diameter attribute to store both plane diameters by key
+        self.diameter = {
+            "primary": float(p1_diameter),
+            "secondary": float(p2_diameter),
+        }
+
+        # Reuse layers and map to multiple planes
+        self.layers = {
+            "primary": dlu.list2dictionary(p1_layers, True, OpticalLayer),
+            "secondary": dlu.list2dictionary(p2_layers, True, OpticalLayer),
+        }
+
+        # Convenience aliases for now (keep existing behavior unchanged)
+        # These can eventually be removed entirely
+        self.p1_diameter = self.diameter["primary"]
+        self.p2_diameter = self.diameter["secondary"]
+        self.p1_layers = self.layers["primary"]
+        self.p2_layers = self.layers["secondary"]
+
+        # Converging-beam specific parameters
+        self.plane_separation = float(plane_separation)
+        self.magnification = float(magnification)
+
+        # Compute pad_factor for propagation to P2
+        primary, secondary = self.plane_names
+        self.pad_factor = int(
+            np.ceil(
+                (self.diameter[secondary] * self.magnification)
+                / self.diameter[primary]
+            )
         )
 
     def __getattr__(self, key: str):
