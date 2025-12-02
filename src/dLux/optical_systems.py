@@ -707,6 +707,26 @@ class ConvergingBeamOpticalSystem(
     magnification: None
     pad_factor: None
 
+    @property
+    def p1_diameter(self) -> float:
+        """Diameter of the primary (plane 1) pupil in metres."""
+        return self.diameter[self.plane_names[0]]
+
+    @property
+    def p2_diameter(self) -> float:
+        """Diameter of the secondary (plane 2) pupil in metres."""
+        return self.diameter[self.plane_names[1]]
+
+    @property
+    def p1_layers(self) -> OrderedDict:
+        """Ordered mapping of layers applied at the primary plane."""
+        return self.layers[self.plane_names[0]]
+
+    @property
+    def p2_layers(self) -> OrderedDict:
+        """Ordered mapping of layers applied at the secondary plane."""
+        return self.layers[self.plane_names[1]]
+
     def __init__(
         self: OpticalSystem,
         wf_npixels: int,
@@ -780,13 +800,6 @@ class ConvergingBeamOpticalSystem(
             "secondary": dlu.list2dictionary(p2_layers, True, OpticalLayer),
         }
 
-        # Convenience aliases for now (keep existing behavior unchanged)
-        # These can eventually be removed entirely
-        self.p1_diameter = self.diameter["primary"]
-        self.p2_diameter = self.diameter["secondary"]
-        self.p1_layers = self.layers["primary"]
-        self.p2_layers = self.layers["secondary"]
-
         # Converging-beam specific parameters
         self.plane_separation = float(plane_separation)
         self.magnification = float(magnification)
@@ -801,13 +814,21 @@ class ConvergingBeamOpticalSystem(
         )
 
     def __getattr__(self, key: str):
-        # Search both p1_layers and p2_layers for a direct key match
-        for layer_dict in (self.p1_layers, self.p2_layers):
-            if key in layer_dict:
-                return layer_dict[key]
+        """
+        Search for layers and layer attributes across all planes.
 
-            # Search inside each layer for an attribute with that key
-            for layer in layer_dict.values():
+        This extends the LayeredOpticalSystem behaviour to a multi-plane
+        system by iterating over the per-plane layer dictionaries stored
+        in `self.layers`.
+        """
+        # Iterate over each plane's layers
+        for plane_layers in self.layers.values():
+            # Direct layer lookup by key
+            if key in plane_layers:
+                return plane_layers[key]
+
+            # Attribute lifted from any layer
+            for layer in plane_layers.values():
                 if hasattr(layer, key):
                     return getattr(layer, key)
 
@@ -819,7 +840,7 @@ class ConvergingBeamOpticalSystem(
         self: OpticalSystem,
         layer: Union[OpticalLayer, tuple],
         index: int,
-        plane_index: int,  # Updated argument name
+        plane_index: int,
     ) -> OpticalSystem:
         """
         Inserts a layer into the specified plane's layers at a given index.
@@ -831,25 +852,30 @@ class ConvergingBeamOpticalSystem(
         index : int
             The index at which to insert the layer.
         plane_index : int
-            The index of the plane where the layer should be inserted. `0` or `1`.
+            The index of the plane where the layer should be inserted.
+            For this class, 0 corresponds to the primary plane and
+            1 corresponds to the secondary plane.
 
         Returns
         -------
         optical_system : OpticalSystem
             The updated optical system.
         """
-        if plane_index == 0:
-            updated_layers = dlu.insert_layer(
-                self.p1_layers, layer, index, OpticalLayer
-            )
-            return self.set("p1_layers", updated_layers)
-        elif plane_index == 1:
-            updated_layers = dlu.insert_layer(
-                self.p2_layers, layer, index, OpticalLayer
-            )
-            return self.set("p2_layers", updated_layers)
-        else:
+        if plane_index < 0 or plane_index >= len(self.plane_names):
             raise ValueError("Invalid plane_index. Must be 0 or 1.")
+
+        plane_name = self.plane_names[plane_index]
+
+        # Insert into the appropriate per-plane layer dictionary
+        updated_plane_layers = dlu.insert_layer(
+            self.layers[plane_name], layer, index, OpticalLayer
+        )
+
+        # Create a new multi-plane layers mapping with this plane updated
+        new_layers = {**self.layers, plane_name: updated_plane_layers}
+
+        # Use zodiax-style .set to return an updated system
+        return self.set("layers", new_layers)
 
     def remove_layer(
         self: OpticalSystem, key: str, plane_index: int
@@ -862,21 +888,25 @@ class ConvergingBeamOpticalSystem(
         key : str
             The key of the layer to remove.
         plane_index : int
-            The plane where the layer should be removed. Must be `0` or `1`.
+            The plane where the layer should be removed. Must be 0 or 1.
 
         Returns
         -------
         optical_system : OpticalSystem
             The updated optical system.
         """
-        if plane_index == 0:
-            updated_layers = dlu.remove_layer(self.p1_layers, key)
-            return self.set("p1_layers", updated_layers)
-        elif plane_index == 1:
-            updated_layers = dlu.remove_layer(self.p2_layers, key)
-            return self.set("p2_layers", updated_layers)
-        else:
+        if plane_index < 0 or plane_index >= len(self.plane_names):
             raise ValueError("Invalid plane_index. Must be 0 or 1.")
+
+        plane_name = self.plane_names[plane_index]
+
+        # Remove the layer from the appropriate per-plane dictionary
+        updated_plane_layers = dlu.remove_layer(self.layers[plane_name], key)
+
+        # Create a new multi-plane layers mapping with this plane updated
+        new_layers = {**self.layers, plane_name: updated_plane_layers}
+
+        return self.set("layers", new_layers)
 
     def propagate_mono(
         self: OpticalSystem,
